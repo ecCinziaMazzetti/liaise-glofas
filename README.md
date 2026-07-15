@@ -24,10 +24,9 @@ domain using WFDE5-CRU-GPCC forcing.
     --repeat-last-for-final-year
    ```
 
-Each annual file uses:
+Each annual file uses as time reference:
 hours since 1988-01-01 00:00:00
-
-and contains an additional endpoint at 00 UTC on 1 January of the
+and it contains an additional endpoint at 00 UTC on 1 January of the
 following year. For the final year, the final forcing record is repeated.
 
 3. Generate the ecLand namelist:
