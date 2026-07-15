@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Large forcing datasets
+forcing/WFDE5_CRU_GPCC/
+forcing/WFDE5_CRU_GPCC_ecland/
+*.nc
+*.grb
+*.grib
+*.grb1
+*.grb2
+*.zarr/
+
+# Generated ancillary files
+init_clim/output/
+init_clim/work/
+
+# Externally copied Python dependency
+init_clim/osm_pyutils/
+
+# Runtime products
+run/logs/
+run/output/
+run/restart/
+run/work/
+
+# Scheduler output
+slurm-*.out
+*.out
+*.err
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*~
+.DS_Store
