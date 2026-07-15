@@ -13,9 +13,11 @@ domain using WFDE5-CRU-GPCC forcing.
    ./init_clim.sh
    ```
 
-2. Prepare annual forcing files:
+2. Download and process annual forcing files:
    ```bash
    cd forcing
+   ./get_liaise_forcing_05.sh
+  
    python3 prepare_liaise_forcing_ecland.py \
     --input-dir WFDE5_CRU_GPCC \
     --output-dir WFDE5_CRU_GPCC_ecland \
@@ -54,6 +56,8 @@ This is alternative to 4. in case of an HPC setup
 ## Repository content
    ```bash
    forcing/
+     get_liaise_forcing_05.sh 
+     get_liaise_forcing_km.sh
      prepare_liaise_forcing_ecland.py
      prepare_liaise_forcing_ecland.sh
 
