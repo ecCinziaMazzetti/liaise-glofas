@@ -53,23 +53,25 @@ This is alternative to 4. in case of an HPC setup
    ```
 
 ## Repository content
-forcing/
-  prepare_liaise_forcing_ecland.py
-  prepare_liaise_forcing_ecland.sh
+   ```bash
+   forcing/
+     prepare_liaise_forcing_ecland.py
+     prepare_liaise_forcing_ecland.sh
 
-init_clim/
-  clim.sh
-  init_clim.py
-  init_clim.sh
+   init_clim/
+     clim.sh
+     init_clim.py
+     init_clim.sh
 
-namelist/
-  create_liaise_namelist.sh
-  input
+   namelist/
+     create_liaise_namelist.sh
+     input
 
-run/
-  postprocess_liaise_ecland.sh
-  run_liaise_ecland.sh
-  run_liaise_ecland.slurm
+   run/
+     postprocess_liaise_ecland.sh
+     run_liaise_ecland.sh
+     run_liaise_ecland.slurm
+   ```
 
 Large forcing datasets, generated ancillary files, outputs, logs, work
 directories, and restart files are intentionally excluded from Git.
