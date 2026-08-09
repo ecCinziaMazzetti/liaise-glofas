@@ -13,6 +13,16 @@ domain using WFDE5-CRU-GPCC forcing.
    ./init_clim.sh
    ```
 
+   This requires MARS access. Outside ECMWF (for example on macOS), install
+   the pre-generated, validated `surfclim`/`soilinit` files instead. They are
+   tracked via Git LFS under `init_clim/data/`:
+
+   ```bash
+   git lfs pull
+   cd init_clim
+   ./get_init_clim.sh
+   ```
+
 2. Download and process annual forcing files:
    ```bash
    cd forcing
@@ -65,6 +75,10 @@ This is alternative to 4. in case of an HPC setup
      clim.sh
      init_clim.py
      init_clim.sh
+     get_init_clim.sh
+     data/
+       soilinit
+       surfclim
 
    namelist/
      create_liaise_namelist.sh
@@ -77,5 +91,7 @@ This is alternative to 4. in case of an HPC setup
    ```
 
 Large forcing datasets, generated ancillary files, outputs, logs, work
-directories, and restart files are intentionally excluded from Git.
+directories, and restart files are intentionally excluded from Git. The
+exception is `init_clim/data/soilinit` and `init_clim/data/surfclim`, which
+are tracked via Git LFS as validated reference ancillary files.
 

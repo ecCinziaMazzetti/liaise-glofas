@@ -24,8 +24,8 @@ set -euo pipefail
 # -------------------------
 # Paths
 # -------------------------
-WORK=${WORK:-${PERM:-/perm/$USER}}
-ROOT=${ROOT:-$WORK/liaise}
+WORK=${WORK:-${PERM:-/Users/$USER/Work}}
+ROOT=${ROOT:-$WORK/liaise-ecland}
 FORCING_DIR=${FORCING_DIR:-${ROOT}/forcing/WFDE5_CRU_GPCC_ecland}
 STATIC_DIR=${STATIC_DIR:-${ROOT}/init_clim/work}
 NAMELIST=${NAMELIST:-${ROOT}/namelist/input}
@@ -218,10 +218,18 @@ for forcing_file in "${forcing_files[@]}"; do
     tee "$log_file"
 
     set +e
-    srun \
-        --ntasks="${SLURM_NTASKS:-1}" \
-        --cpus-per-task="${SLURM_CPUS_PER_TASK:-${OMP_NUM_THREADS}}" \
-        "$ECLAND_EXE" >> "$log_file" 2>&1
+    if command -v srun >/dev/null 2>&1; then
+        srun \
+            --ntasks="${SLURM_NTASKS:-1}" \
+            --cpus-per-task="${SLURM_CPUS_PER_TASK:-${OMP_NUM_THREADS}}" \
+            "$ECLAND_EXE" >> "$log_file" 2>&1
+    else
+        # No Slurm on this host (e.g. local/macOS run): invoke directly.
+        # Open MPI's hwloc topology discovery probes the GPU via OpenCL,
+        # which crashes (SIGILL) inside Apple's Metal driver on Apple
+        # Silicon. Disable the opencl hwloc component to avoid this.
+        HWLOC_COMPONENTS=-opencl "$ECLAND_EXE" >> "$log_file" 2>&1
+    fi
     status=$?
     set -e
 

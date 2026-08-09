@@ -61,7 +61,7 @@
   LWRLKE=.FALSE.           ! logical, write o_lke - lake variables
   LSEMISS=.FALSE.          ! LOGICAL : EMISSIVITY SET TO CONSTANT VALUE REMISS
   LDBGS1=.FALSE.           ! LOGICAL : PRINT DEBUG INFO, EG FORCING DATA (DEFAULT=FALSE)
-  IDBGS1=2                 ! Debug level : output printing
+  IDBGS1=0                 ! Debug level : output printing
   /
   &NAMFORC
   ZPHISTA=10.0      ! REFERENCE LEVEL (FOR T, Q) last model level ERAI

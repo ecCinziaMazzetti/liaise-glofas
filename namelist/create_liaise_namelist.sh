@@ -41,8 +41,18 @@ END_TIME=${END_TIME:-00}
 OSMTSTEP=${OSMTSTEP:-1800}
 ZDTFORC=${ZDTFORC:-3600}
 
-START_EPOCH=$(date -u -d "${START_DATE} ${START_TIME}:00" +%s)
-END_EPOCH=$(date -u -d "${END_DATE} ${END_TIME}:00" +%s)
+# GNU `date -d` vs BSD/macOS `date -j -f`
+epoch_from_date() {
+    local d="$1" t="$2" out
+    if out=$(date -u -d "${d} ${t}:00" +%s 2>/dev/null); then
+        echo "$out"
+    else
+        date -u -j -f "%Y%m%d %H:%M" "${d} ${t}:00" +%s
+    fi
+}
+
+START_EPOCH=$(epoch_from_date "$START_DATE" "$START_TIME")
+END_EPOCH=$(epoch_from_date "$END_DATE" "$END_TIME")
 RUN_SECONDS=$((END_EPOCH - START_EPOCH))
 (( RUN_SECONDS > 0 )) || { echo "ERROR: invalid run period" >&2; exit 1; }
 (( RUN_SECONDS % OSMTSTEP == 0 )) || { echo "ERROR: run length not divisible by OSMTSTEP" >&2; exit 1; }
@@ -61,6 +71,8 @@ EXPVER=${EXPVER:-liaise_wfde5}
 IFS_CYCLE=${IFS_CYCLE:-CY50R1}
 LNF=${LNF:-.TRUE.}
 LPROD=${LPROD:-.TRUE.}
+LDBGS1=${LDBGS1:-.FALSE.}
+IDBGS1=${IDBGS1:-0}
 NCSS=${NCSS:-4}
 NCWS=${NCWS:-0}
 NCSNEC=${NCSNEC:-5}
@@ -178,8 +190,8 @@ cat > "$OUTDIR/input" <<NAMELIST
   LWRTIL=.FALSE.           ! logical, write o_til - tiles 2D (tile) state
   LWRLKE=.FALSE.           ! logical, write o_lke - lake variables
   LSEMISS=.FALSE.          ! LOGICAL : EMISSIVITY SET TO CONSTANT VALUE REMISS
-  LDBGS1=.FALSE.           ! LOGICAL : PRINT DEBUG INFO, EG FORCING DATA (DEFAULT=FALSE)
-  IDBGS1=0                 ! Debug level : output printing
+  LDBGS1=$LDBGS1           ! LOGICAL : PRINT DEBUG INFO, EG FORCING DATA (DEFAULT=FALSE)
+  IDBGS1=$IDBGS1                 ! Debug level : output printing
   /
   &NAMFORC
   ZPHISTA=${FCHEIGHT}      ! REFERENCE LEVEL (FOR T, Q) last model level ERAI

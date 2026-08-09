@@ -22,8 +22,16 @@ DATA_DIR="${SCRIPT_DIR}/data"
 WORK_DIR="${SCRIPT_DIR}/work"
 
 for name in soilinit surfclim; do
-    if [[ ! -f "${DATA_DIR}/${name}" ]]; then
-        echo "ERROR: ${DATA_DIR}/${name} not found." >&2
+    file="${DATA_DIR}/${name}"
+    if [[ ! -f "$file" ]]; then
+        echo "ERROR: ${file} not found." >&2
+        echo "Run 'git lfs pull' to retrieve the ancillary data." >&2
+        exit 1
+    fi
+    # An unresolved Git LFS file is a small text pointer, not the real
+    # binary payload. Catch that case rather than silently installing it.
+    if head -c 40 "$file" | grep -q "^version https://git-lfs.github.com"; then
+        echo "ERROR: ${file} is an unresolved Git LFS pointer, not the actual data." >&2
         echo "Run 'git lfs pull' to retrieve the ancillary data." >&2
         exit 1
     fi

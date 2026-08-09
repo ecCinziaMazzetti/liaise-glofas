@@ -43,6 +43,12 @@ In particular, do not add:
 
 Respect `.gitignore`.
 
+The exception is `init_clim/data/soilinit` and `init_clim/data/surfclim`,
+which are validated reference ancillary files tracked via Git LFS (see
+`.gitattributes`). These are distinct from the gitignored `init_clim/work/`
+and `init_clim/output/` directories, which hold regenerated, run-specific
+copies.
+
 ## Forcing workflows
 
 ### 0.5-degree forcing
@@ -89,6 +95,18 @@ The output grid must match the forcing grid.
 
 The current workflow also repairs/initializes the multilayer snow state where
 needed.
+
+### Pre-generated ancillary files
+
+`init_clim/get_init_clim.sh`
+
+Validated `surfclim`/`soilinit` files are stored under `init_clim/data/` via
+Git LFS, so they can be installed into `init_clim/work/` without regenerating
+them from MARS. This is the supported path when running outside ECMWF (for
+example on macOS), where MARS access is unavailable.
+
+Run `git lfs pull` before invoking the script if the files under
+`init_clim/data/` have not yet been fetched.
 
 ## ecLand execution
 
