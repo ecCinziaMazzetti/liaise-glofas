@@ -1,0 +1,2 @@
+init_clim/data/soilinit filter=lfs diff=lfs merge=lfs -text
+init_clim/data/surfclim filter=lfs diff=lfs merge=lfs -text

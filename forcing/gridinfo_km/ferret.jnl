@@ -1,0 +1,9 @@
+ ! NOAA/PMEL TMAP
+ ! FERRET v7.6 (optimized)
+ ! Linux 3.10.0-1127.10.1.el7.x86_64 64-bit - 06/25/20
+ ! 23-Feb-25 07:35     
+
+use LIAISE_Contfrac.nc
+shade contfrac
+list contfrac[i=@sum,j=@sum]
+shade contfrac

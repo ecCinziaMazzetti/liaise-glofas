@@ -33,8 +33,8 @@ GRIDINFO_URL="${BASE_URL}/GridInfo/"
 GRIDINFO_DIR="gridinfo_km"
 
 PRODUCTS=(
-    "ETHZ_Avg"
-    "IPSL_Alt"
+#    "ETHZ_Avg"
+#    "IPSL_Alt"
     "IPSL_Avg"
 )
 
