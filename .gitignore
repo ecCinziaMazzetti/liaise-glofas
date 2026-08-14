@@ -6,6 +6,7 @@ __pycache__/
 # Large forcing datasets
 forcing/WFDE5_CRU_GPCC/
 forcing/WFDE5_CRU_GPCC_ecland/
+forcing/WFDE5_CRU_GPCC_cds_raw/
 *.nc
 *.grb
 *.grib

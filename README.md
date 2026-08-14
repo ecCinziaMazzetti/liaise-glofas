@@ -36,6 +36,18 @@ domain using WFDE5-CRU-GPCC forcing.
     --repeat-last-for-final-year
    ```
 
+   `get_liaise_forcing_05.sh` mirrors 1988-2014 from IPSL. For later years,
+   `get_liaise_forcing_05_cds.sh` downloads the same WFDE5-CRU-GPCC product
+   from the Copernicus Climate Data Store and assembles it into the same
+   `WFDE5_CRU_GPCC_{year}.nc` layout, so it can be followed by the same
+   `prepare_liaise_forcing_ecland.py` call (with `--start-year`/`--end-year`
+   adjusted). It requires `pip install cdsapi` and a configured
+   `~/.cdsapirc`:
+   ```bash
+   cd forcing
+   START_YEAR=2015 END_YEAR=2024 ./get_liaise_forcing_05_cds.sh
+   ```
+
 Each annual file uses as time reference:
 hours since 1988-01-01 00:00:00
 and it contains an additional endpoint at 00 UTC on 1 January of the
@@ -67,6 +79,8 @@ This is alternative to 4. in case of an HPC setup
    ```bash
    forcing/
      get_liaise_forcing_05.sh 
+     get_liaise_forcing_05_cds.py
+     get_liaise_forcing_05_cds.sh
      get_liaise_forcing_km.sh
      prepare_liaise_forcing_ecland.py
      prepare_liaise_forcing_ecland.sh
