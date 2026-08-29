@@ -11,6 +11,15 @@ set -euo pipefail
 #   4. copies each restart output into the next year's restart input;
 #   5. stores annual outputs and restarts separately.
 #
+# If the ecLand namelist has LECMF1WAY (CaMa-Flood 1-way coupling) turned
+# on, the script also stages the CaMa-Flood static files derived by
+# cama_flood/derive_cmf_weights.sh, generates and patches a per-year
+# CaMa-Flood namelist, and chains the CaMa-Flood restart across years the
+# same way it already does for ecLand's own restart. CaMa-Flood itself is
+# not a separate process: ecland-master calls into it in-process when
+# LECMF1WAY is set (see src/surf/offline/driver/cnt01s.F90 in the ecland
+# repo), so no separate executable or launch step is needed.
+#
 # Usage:
 #   chmod +x run_liaise_ecland.sh
 #   sbatch run_liaise_ecland.sh
@@ -54,42 +63,23 @@ NAMELIST_RUN_NAME=${NAMELIST_RUN_NAME:-input}
 
 FORCING_VARS=(Tair Qair PSurf Rainf Snowf SWdown LWdown Wind)
 
+# -------------------------
+# CaMa-Flood coupling (optional; activated by LECMF1WAY in $NAMELIST)
+# -------------------------
+CMF_STATIC_DIR=${CMF_STATIC_DIR:-${ROOT}/cama_flood/data}
+CMF_NAMELIST=${CMF_NAMELIST:-${ROOT}/namelist/input_cmf}
+CMF_NAMELIST_RUN_NAME=${CMF_NAMELIST_RUN_NAME:-input_cmf.nam}
+CMF_RESTART_IN_NAME=${CMF_RESTART_IN_NAME:-restartin_cmf.nc}
+# Files referenced by namelist/input_cmf's NMAP/NDIMTIME/NFORCE blocks;
+# already named to match what CaMa-Flood expects at runtime.
+CMF_STATIC_FILES=(inpmat.nc rivpar.nc rivclim.nc mpireg.nc bifprm.txt diminfo.txt)
+
 # Optional OpenMP settings
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
 export OMP_STACKSIZE=${OMP_STACKSIZE:-512M}
 
 # -------------------------
-# Validation
-# -------------------------
-for f in "$NAMELIST" "$ECLAND_EXE" "$SURFCLIM_SOURCE" "$SOILINIT_SOURCE"; do
-    if [[ ! -e "$f" ]]; then
-        echo "ERROR: required file not found: $f" >&2
-        exit 1
-    fi
-done
-
-if [[ ! -x "$ECLAND_EXE" ]]; then
-    echo "ERROR: ecLand executable is not executable: $ECLAND_EXE" >&2
-    exit 1
-fi
-
-shopt -s nullglob
-forcing_files=("${FORCING_DIR}"/WFDE5_CRU_GPCC_????_ecland.nc)
-shopt -u nullglob
-
-if (( ${#forcing_files[@]} == 0 )); then
-    echo "ERROR: no forcing files found under $FORCING_DIR" >&2
-    exit 1
-fi
-
-IFS=$'\n' forcing_files=($(printf '%s\n' "${forcing_files[@]}" | sort))
-unset IFS
-
-echo "Found ${#forcing_files[@]} annual forcing files:"
-printf '  %s\n' "${forcing_files[@]}"
-
-# -------------------------
-# Helpers
+# Helpers (defined before Validation/main loop, both of which use them)
 # -------------------------
 is_leap_year() {
     local year=$1
@@ -110,6 +100,21 @@ sed_inplace() {
     else
         sed -i '' -E "$@"
     fi
+}
+
+# Read a "KEY = value ! comment" style namelist entry, tolerant of
+# whitespace around "=" and a trailing inline comment.
+nml_value() {
+    local key=$1 file=$2
+    awk -v key="$key" '
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            line = $0
+            sub(/!.*/, "", line)
+            sub(/^[^=]*=/, "", line)
+            gsub(/[[:space:],]/, "", line)
+            print line
+            exit
+        } ' "$file"
 }
 
 patch_namelist_for_year() {
@@ -153,10 +158,103 @@ patch_namelist_for_year() {
     echo "Configured namelist for year $year (${days} days, full-year endpoint included, NSTOP=${nstop})"
 }
 
+patch_cmf_namelist_for_year() {
+    local file=$1
+    local year=$2
+    local tcoupfreq=$3
+
+    # CaMa-Flood's own NSIMTIME, independent of ecLand's NINDAT/NSTOP:
+    # run the full calendar year, 00Z Jan 1 through 00Z Dec 31 (EHOUR
+    # stays 00, from the template, and is not patched here). This mirrors
+    # ecLand's own per-year NSTOP (see patch_namelist_for_year): the
+    # forcing's extra endpoint at next-year 01-01 00Z is not stepped.
+    #
+    # IFRQ_INP/DROFUNIT are derived from ecLand's own TCOUPFREQ (hours)
+    # rather than left as static template values, so the two namelists
+    # can't silently drift out of sync with each other.
+    local drofunit=$((tcoupfreq * 3600))
+
+    sed_inplace \
+    -e "s/^([[:space:]]*SYEAR[[:space:]]*=).*/\1 ${year}/" \
+    -e "s/^([[:space:]]*SMON[[:space:]]*=).*/\1 01/" \
+    -e "s/^([[:space:]]*SDAY[[:space:]]*=).*/\1 01/" \
+    -e "s/^([[:space:]]*EYEAR[[:space:]]*=).*/\1 ${year}/" \
+    -e "s/^([[:space:]]*EMON[[:space:]]*=).*/\1 12/" \
+    -e "s/^([[:space:]]*EDAY[[:space:]]*=).*/\1 31/" \
+    -e "s/^([[:space:]]*IFRQ_INP[[:space:]]*=).*/\1 ${tcoupfreq}/" \
+    -e "s/^([[:space:]]*DROFUNIT[[:space:]]*=).*/\1 ${drofunit}./" \
+    -e "s/^([[:space:]]*DT[[:space:]]*=).*/\1 ${drofunit}/" \
+    "$file"
+
+    echo "Configured CaMa-Flood namelist for year $year (${year}0101-${year}1231, IFRQ_INP=${tcoupfreq}h)"
+}
+
+# -------------------------
+# Validation
+# -------------------------
+[[ -f "$NAMELIST" ]] || { echo "ERROR: required file not found: $NAMELIST" >&2; exit 1; }
+
+RUN_CMF=false
+if grep -qiE '^[[:space:]]*LECMF1WAY[[:space:]]*=[[:space:]]*\.?true\.?' "$NAMELIST"; then
+    RUN_CMF=true
+    echo "LECMF1WAY is on in $NAMELIST: CaMa-Flood coupling enabled."
+fi
+
+required_files=("$NAMELIST" "$ECLAND_EXE" "$SURFCLIM_SOURCE" "$SOILINIT_SOURCE")
+if [[ "$RUN_CMF" == "true" ]]; then
+    required_files+=("$CMF_NAMELIST")
+    for f in "${CMF_STATIC_FILES[@]}"; do
+        required_files+=("${CMF_STATIC_DIR}/${f}")
+    done
+fi
+
+for f in "${required_files[@]}"; do
+    if [[ ! -e "$f" ]]; then
+        echo "ERROR: required file not found: $f" >&2
+        exit 1
+    fi
+done
+
+if [[ ! -x "$ECLAND_EXE" ]]; then
+    echo "ERROR: ecLand executable is not executable: $ECLAND_EXE" >&2
+    exit 1
+fi
+
+CMF_TCOUPFREQ=""
+if [[ "$RUN_CMF" == "true" ]]; then
+    # TCOUPFREQ (hours): how often ecLand hands accumulated runoff off to
+    # CaMa-Flood. This is unrelated to ecLand's own TSTEP -- CaMa-Flood
+    # substeps adaptively (LADPSTP=.TRUE. in namelist/input_cmf) between
+    # coupling exchanges. IFRQ_INP/DROFUNIT in the CaMa-Flood namelist
+    # must track it, so it's read once here and applied per year in
+    # patch_cmf_namelist_for_year rather than kept in sync by hand.
+    CMF_TCOUPFREQ=$(nml_value TCOUPFREQ "$NAMELIST")
+    if [[ -z "$CMF_TCOUPFREQ" ]]; then
+        echo "ERROR: could not read TCOUPFREQ from $NAMELIST" >&2
+        exit 1
+    fi
+fi
+
+shopt -s nullglob
+forcing_files=("${FORCING_DIR}"/WFDE5_CRU_GPCC_????_ecland.nc)
+shopt -u nullglob
+
+if (( ${#forcing_files[@]} == 0 )); then
+    echo "ERROR: no forcing files found under $FORCING_DIR" >&2
+    exit 1
+fi
+
+IFS=$'\n' forcing_files=($(printf '%s\n' "${forcing_files[@]}" | sort))
+unset IFS
+
+echo "Found ${#forcing_files[@]} annual forcing files:"
+printf '  %s\n' "${forcing_files[@]}"
+
 # -------------------------
 # Main annual loop
 # -------------------------
 previous_restart=""
+previous_restart_cmf=""
 
 for forcing_file in "${forcing_files[@]}"; do
     base=$(basename "$forcing_file")
@@ -203,6 +301,23 @@ for forcing_file in "${forcing_files[@]}"; do
         echo "Restart input: $previous_restart -> $RESTART_IN_NAME"
     fi
 
+    if [[ "$RUN_CMF" == "true" ]]; then
+        for f in "${CMF_STATIC_FILES[@]}"; do
+            ln -sf "${CMF_STATIC_DIR}/${f}" "${f}"
+        done
+        cp -f "$CMF_NAMELIST" "$CMF_NAMELIST_RUN_NAME"
+        patch_cmf_namelist_for_year "$CMF_NAMELIST_RUN_NAME" "$year" "$CMF_TCOUPFREQ"
+
+        if [[ -z "$previous_restart_cmf" ]]; then
+            sed_inplace -e 's/^([[:space:]]*LRESTART[[:space:]]*=).*/\1 false/' "$CMF_NAMELIST_RUN_NAME"
+            echo "CaMa-Flood initial state: cold start"
+        else
+            cp -f "$previous_restart_cmf" "$CMF_RESTART_IN_NAME"
+            sed_inplace -e 's/^([[:space:]]*LRESTART[[:space:]]*=).*/\1 true/' "$CMF_NAMELIST_RUN_NAME"
+            echo "CaMa-Flood restart input: $previous_restart_cmf -> $CMF_RESTART_IN_NAME"
+        fi
+    fi
+
     for var in "${FORCING_VARS[@]}"; do
         ln -sf "$forcing_file" "${var}.nc"
     done
@@ -218,18 +333,17 @@ for forcing_file in "${forcing_files[@]}"; do
     tee "$log_file"
 
     set +e
-    if command -v srun >/dev/null 2>&1; then
-        srun \
-            --ntasks="${SLURM_NTASKS:-1}" \
-            --cpus-per-task="${SLURM_CPUS_PER_TASK:-${OMP_NUM_THREADS}}" \
-            "$ECLAND_EXE" >> "$log_file" 2>&1
-    else
-        # No Slurm on this host (e.g. local/macOS run): invoke directly.
-        # Open MPI's hwloc topology discovery probes the GPU via OpenCL,
-        # which crashes (SIGILL) inside Apple's Metal driver on Apple
-        # Silicon. Disable the opencl hwloc component to avoid this.
-        HWLOC_COMPONENTS=-opencl "$ECLAND_EXE" >> "$log_file" 2>&1
-    fi
+    # Run directly rather than via srun. On ECMWF HPC, invoking srun from
+    # inside an already-running interactive shell launches a separate job
+    # step that does not reliably inherit this shell's module-loaded
+    # environment (observed: the step lands on its allocated node without
+    # hpcx-openmpi's LD_LIBRARY_PATH, so ECLAND_EXE fails to find libmpi
+    # even with --export=ALL). Submit via run_liaise_ecland.slurm instead
+    # for a proper Slurm allocation.
+    # Open MPI's hwloc topology discovery probes the GPU via OpenCL, which
+    # crashes (SIGILL) inside Apple's Metal driver on Apple Silicon;
+    # disabling the opencl hwloc component is harmless elsewhere.
+    HWLOC_COMPONENTS=-opencl "$ECLAND_EXE" >> "$log_file" 2>&1
     status=$?
     set -e
 
@@ -247,6 +361,7 @@ for forcing_file in "${forcing_files[@]}"; do
 
     find . -maxdepth 1 -type f \
         ! -name "$NAMELIST_RUN_NAME" \
+        ! -name "$CMF_NAMELIST_RUN_NAME" \
         -exec cp -f {} "$year_out/" \;
 
     cp -f "$log_file" "$year_out/"
@@ -282,6 +397,28 @@ for forcing_file in "${forcing_files[@]}"; do
 
     previous_restart="$final_restart"
     echo "Saved annual restart: $previous_restart"
+
+    if [[ "$RUN_CMF" == "true" ]]; then
+        # CaMa-Flood names its own restart file from the (patched) EYEAR/
+        # EMON/EDAY/EHOUR fields it was just run with, independently of
+        # ecLand's RESTART_OUT_NAME.
+        cmf_eyear=$(nml_value EYEAR "$CMF_NAMELIST_RUN_NAME")
+        cmf_emon=$(nml_value EMON "$CMF_NAMELIST_RUN_NAME")
+        cmf_eday=$(nml_value EDAY "$CMF_NAMELIST_RUN_NAME")
+        cmf_ehour=$(nml_value EHOUR "$CMF_NAMELIST_RUN_NAME")
+        cmf_restart_produced="restart${cmf_eyear}${cmf_emon}${cmf_eday}${cmf_ehour}.nc"
+
+        if [[ ! -f "$cmf_restart_produced" ]]; then
+            echo "ERROR: expected CaMa-Flood restart output not found: $cmf_restart_produced" >&2
+            echo "Check EYEAR/EMON/EDAY/EHOUR in $CMF_NAMELIST_RUN_NAME against the actual output." >&2
+            exit 1
+        fi
+
+        final_restart_cmf="${year_restart}/restart_cmf_${year}1231.nc"
+        cp -f "$cmf_restart_produced" "$final_restart_cmf"
+        previous_restart_cmf="$final_restart_cmf"
+        echo "Saved annual CaMa-Flood restart: $previous_restart_cmf"
+    fi
 done
 
 echo

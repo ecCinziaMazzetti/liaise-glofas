@@ -1,2 +1,8 @@
 init_clim/data/soilinit filter=lfs diff=lfs merge=lfs -text
 init_clim/data/surfclim filter=lfs diff=lfs merge=lfs -text
+cama_flood/data/inpmat.nc filter=lfs diff=lfs merge=lfs -text
+cama_flood/data/ncdata.nc filter=lfs diff=lfs merge=lfs -text
+cama_flood/data/rivclim.nc filter=lfs diff=lfs merge=lfs -text
+cama_flood/data/rivpar.nc filter=lfs diff=lfs merge=lfs -text
+cama_flood/data/outclm.nc filter=lfs diff=lfs merge=lfs -text
+cama_flood/data/mpireg.nc filter=lfs diff=lfs merge=lfs -text

@@ -21,6 +21,13 @@ init_clim/work/
 # Externally copied Python dependency
 init_clim/osm_pyutils/
 
+# CaMa-Flood weight-derivation scratch space
+cama_flood/work/
+
+# ... except the validated, LIAISE-derived reference files (Git LFS), which
+# would otherwise be caught by the *.nc rule above.
+!cama_flood/data/*.nc
+
 # Runtime products
 run/logs/
 run/output/

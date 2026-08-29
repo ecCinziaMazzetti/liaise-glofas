@@ -60,6 +60,26 @@ following year. For the final year, the final forcing record is repeated.
    ./create_liaise_namelist.sh
    ```
 
+3b. (Optional) Derive CaMa-Flood coupling weights:
+
+   ```bash
+   cd cama_flood
+   ./derive_cmf_weights.sh
+   ```
+
+   Produces the interpolation weights between the LIAISE ecLand grid and the
+   CaMa-Flood river network, plus the clipped river-network fix files, for
+   running ecLand coupled to CaMa-Flood river routing (`LECMF1WAY=.T.` in
+   the namelist). Validated reference output is tracked under
+   `cama_flood/data/` via Git LFS; run `git lfs pull` to fetch it instead of
+   regenerating it.
+
+   To actually enable the coupling, set `LECMF1WAY=true` when running
+   `namelist/create_liaise_namelist.sh` (step 3) and regenerate
+   `namelist/input`. `run/run_liaise_ecland.sh` detects this automatically
+   at run time and stages/patches `namelist/input_cmf` and the
+   `cama_flood/data/` files for you -- no separate flag needed.
+
 4. Run ecLand interactively:
 
    ```bash
@@ -97,15 +117,28 @@ This is alternative to 4. in case of an HPC setup
    namelist/
      create_liaise_namelist.sh
      input
+     input_cmf
 
    run/
      postprocess_liaise_ecland.sh
      run_liaise_ecland.sh
      run_liaise_ecland.slurm
+
+   cama_flood/
+     derive_cmf_weights.sh
+     data/
+       inpmat.nc
+       ncdata.nc
+       rivclim.nc
+       rivpar.nc
+       outclm.nc
+       bifprm.txt
+       diminfo.txt
    ```
 
 Large forcing datasets, generated ancillary files, outputs, logs, work
 directories, and restart files are intentionally excluded from Git. The
-exception is `init_clim/data/soilinit` and `init_clim/data/surfclim`, which
-are tracked via Git LFS as validated reference ancillary files.
+exception is `init_clim/data/soilinit`, `init_clim/data/surfclim`, and
+`cama_flood/data/`, which are tracked via Git LFS as validated reference
+files.
 

@@ -1,0 +1,11 @@
+73       !! nXX
+49       !! nYY
+10     !! floodplain layer
+23     !! input nXX
+16     !! input nYY
+11     !! input num
+NONE
+0     !! west  edge
+0     !! east  edge
+0     !! north edge
+0     !! south edge

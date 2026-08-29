@@ -24,6 +24,10 @@ namelist/
 run/
   Run ecLand annually, manage restarts, and post-process outputs.
 
+cama_flood/
+  Derive the ecLand <-> CaMa-Flood interpolation weights and river-network
+  fix files for the LIAISE domain.
+
 ## Data policy
 
 Do not commit large generated or downloaded data.
@@ -38,16 +42,21 @@ In particular, do not add:
 - `run/work/`
 - `run/output/`
 - `run/restart/`
+- `cama_flood/work/`
 - logs
 - Python caches
 
 Respect `.gitignore`.
 
-The exception is `init_clim/data/soilinit` and `init_clim/data/surfclim`,
-which are validated reference ancillary files tracked via Git LFS (see
-`.gitattributes`). These are distinct from the gitignored `init_clim/work/`
-and `init_clim/output/` directories, which hold regenerated, run-specific
-copies.
+The exception is `init_clim/data/soilinit`, `init_clim/data/surfclim`, and
+the files under `cama_flood/data/`, which are validated reference files
+tracked via Git LFS (see `.gitattributes`). These are small, LIAISE-specific
+*derived* outputs, distinct from the much larger upstream/global datasets
+they are built from (the ECMWF `climate.v021` archive, and the global
+CaMa-Flood static network data -- see `cama_flood/derive_cmf_weights.sh`),
+which must never be committed. They are also distinct from the gitignored
+`init_clim/work/`, `init_clim/output/`, and `cama_flood/work/` directories,
+which hold regenerated, run-specific copies.
 
 ## Forcing workflows
 
@@ -107,6 +116,217 @@ example on macOS), where MARS access is unavailable.
 
 Run `git lfs pull` before invoking the script if the files under
 `init_clim/data/` have not yet been fetched.
+
+## CaMa-Flood coupling
+
+`cama_flood/derive_cmf_weights.sh`
+
+Derives the interpolation weights (`inpmat.nc`) mapping the LIAISE ecLand
+runoff grid onto the CaMa-Flood river network, plus the clipped river-network
+fix files CaMa-Flood needs (`ncdata.nc`, `rivclim.nc`, `rivpar.nc`,
+`outclm.nc`, `mpireg.nc`, `bifprm.txt`, `diminfo.txt`). Output lands in
+`cama_flood/work/` for review; the validated, committed reference copies
+live in `cama_flood/data/` (Git LFS).
+
+This script adapts (rather than calls directly) the `ecland` repo's own
+`tools/create_forcing/scripts/prepare_basin_ini.bash` / `gen_inpmat.py`,
+because that upstream tool assumes the ecLand grid being coupled is a
+*subset of the global reduced-Gaussian IFS grid* (the normal case: cut a
+regional CaMa-Flood domain out of a global run). LIAISE's ecLand grid is an
+independently-built regular 0.5-degree lat/lon grid, not a subset of any
+global grid, so the global-Gaussian-grid clipping step (`sel_region.py
+-inpmat`, which produces `cdo_clip_htessel.txt`) does not apply and is
+skipped -- LIAISE's `surfclim`/`soilinit` are already regional and used
+directly.
+
+### Domain: extend crossing basins, not a fixed halo
+
+`EXTEND_CROSSING_BASINS=true` (the default) passes `sel_region.py -e`, so
+any river basin crossing the requested LIAISE box is kept in full rather
+than dropped -- `sel_region.py`'s default otherwise drops a crossing basin
+*entirely*, not just the part outside the box. This grows the actual
+derived domain well beyond LIAISE's own bounds (currently the box roughly
+spans Iberia to the Alps, ~-9 to 8.5 lon / 37 to 48.5 lat, versus LIAISE's
+own -5.75/5.25/39.25/46.75), because this location sits where both the
+Ebro and Rhone basins cross a small regional box.
+
+This was tested against two alternatives, both rejected -- **a fixed halo
+around the LIAISE box does not work**, and gets *worse*, not better, as
+the halo grows:
+
+| Domain | Active cells | Finite output | Negative-discharge rate | Worst negative |
+|---|---|---|---|---|
+| No halo, no `-e` (original) | 522 | 11 (2%) | -- | -- |
+| 0.5 deg halo, no `-e` | 577 | 577 (100%) | 0.33% | -7091 m3/s |
+| 2 deg halo, no `-e` | 965 | 965 (100%) | 0.48% | -6582 m3/s |
+| **Full extension (`-e`)** | **1405** | **1405 (100%)** | **0.13%** | -5205 m3/s |
+
+CaMa-Flood's local-inertia solver (`LADPSTP`/`LFLDOUT`/`LPTHOUT`) allows
+backward flow, which is physically real near estuaries and confluences but
+becomes a numerical artifact wherever a hard domain edge cuts through one.
+A fixed halo of any size tested still truncates basins mid-stream, so it
+just relocates that artifact to wherever the edge happens to land (the
+0.5 deg halo cut the Garonne/Dordogne estuary; the 2 deg halo moved the
+worst case to the Biscay coast/Loire estuary). Full extension is the only
+tested option that lets basins reach their real outlets, and its residual
+0.13% negative rate concentrates at the Rhone's own delta bifurcation
+channels -- genuine hydraulics, not a boundary artifact. If a future
+change wants to keep the domain smaller, it needs a fundamentally
+different approach (e.g. a real open-boundary condition at the truncation
+point), not a bigger fixed buffer -- re-run the comparison above before
+trusting a smaller domain.
+
+`gen_inpmat.py`'s Cython extension needs a source patch for `-e` to work
+at all -- see "Two ecland-side source patches" below.
+
+### `mpireg.nc`: flattened to a single region, not clipped
+
+`$FIXDIR/mpireg.nc` is the *global* multi-process MPI decomposition map
+(16+ regions across the clipped window). CaMa-Flood (`NPROC_CMF=1` here)
+only computes cells tagged region 1; naively clipping the global file (as
+the first version of this script did) silently carries over the other
+regions' cells, which then never get computed -- confirmed as the actual
+cause of an apparently fragmented, disconnected-looking river network
+(only ~10-11 of 522 "active" cells producing output), which first looked
+like a basin-clipping problem but wasn't. `derive_cmf_weights.sh` clips
+`mpireg.nc` for its grid shape, then sets every valid cell to region 1 via
+an inline Python step -- not a plain `cdo`/`ncks` clip.
+
+### Two ecland-side source patches required
+
+Both are in the **`ecland` repo**, not this one -- a fresh `ecland`
+checkout will not have them; re-apply before deriving weights or running
+with `LECMF1WAY` on. (Committed there alongside this repo's changes; see
+that repo's own history for the exact diffs.)
+
+1. **`src/surf/offline/driver/cnt41s.F90`** -- a real memory-safety bug,
+   independent of the domain-extension work above, required for *any*
+   valid LIAISE CaMa-Flood run. The four `DO IST = 1, NLALO, NPROMA`
+   loops in the `LECMF1WAY` runoff-coupling blocks (and their paired
+   `IEND = MIN(IST+NPROMA-1,NLALO)`) iterate `NLALO` (full grid point
+   count), but every array they touch (`ZBUFFOAUX`, `D1STSRO2` via
+   `GDIAUX1S`, `VFCLAKE`/`VFITM` via `GPD`) is allocated/blocked from
+   `NPOI` (active land points only; `NBLOCKS` computed from `NPOI` in
+   `rdcoor.F90`). Fix: `NLALO` -> `NPOI` in both the loop bound and the
+   `IEND` line, all four occurrences. Confirmed via the debug build
+   (`ecland/build-debug/bin/ecland-master-dp`, built with bounds
+   checking): before the fix, default `NPROMA=120` gave a clean crash
+   (`Subscript #3 of ZBUFFOAUX has value 3 which is greater than the
+   upper bound of 2`); a since-abandoned `NPROMA=400` workaround
+   (documented in an earlier version of this file -- do not use it, it
+   is wrong) avoided the block-count overrun but silently overran
+   `ZBUFFOAUX`'s *first* dimension instead (368 > `NPOI`=235) in the
+   non-bounds-checked release binary, i.e. silent heap corruption, not a
+   fix. After the real fix, the default `NPROMA=120` runs clean with no
+   workaround needed.
+2. **`tools/create_forcing/scripts/osm_pyutils/cython_ext.pyx`** --
+   `gen_inpmat_inp2riv_hres_reg` aborted (`raise ValueError`) on any
+   1-arcmin pixel whose mapped index fell outside the `-igrid` (ecLand)
+   reference grid. That's expected and harmless once basins are kept
+   whole via `-e` above (a river cell's basin now routinely extends far
+   beyond ecLand's own small grid, and such pixels simply have no local
+   runoff to contribute) but crashed `gen_inpmat.py` outright. Fix:
+   `raise ValueError(...)` -> `continue` (skip the pixel) at both bounds
+   checks in `gen_inpmat_inp2riv_hres_reg`. Strictly additive -- every
+   in-bounds pixel's contribution, and therefore every weight already
+   validated before this change, is unchanged; verified via the
+   area-conservation diagnostic (`<1e-13%` error on mapped cells, both
+   before and after).
+
+Also requires two further upstream data sources, referenced by path
+(never committed):
+- `CMFDIR` (default `/home/rdx/data/50r1/camaflood/static_network_nc_v2.1`):
+  shared ECMWF 1-arcmin CaMa-Flood catchment maps, per resolution.
+- `FIXDIR` (default a colleague's ECMWF work-area path -- not guaranteed
+  permanent, override if it disappears): the matching global river-network
+  fix files (`ncdata.nc`, `bifprm.txt`, `rivpar.nc`, `outclm.nc`,
+  `mpireg.nc`).
+
+`derive_cmf_weights.sh` builds the `create_forcing` Cython extension
+automatically if missing *or stale* (older than `cython_ext.pyx`), so a
+pre-patch `.so` is never silently reused.
+
+### Running with CaMa-Flood coupled in
+
+`namelist/input_cmf`
+
+The CaMa-Flood namelist template, staged and patched per year by
+`run/run_liaise_ecland.sh` alongside the ecLand namelist whenever
+`LECMF1WAY` is on in `namelist/input`. CaMa-Flood is not a separate
+executable: `ecland-master` calls into it in-process (see
+`src/surf/offline/driver/cnt01s.F90` in the `ecland` repo), so the wiring
+is entirely about staging its input files and namelist correctly, not
+about launching anything extra.
+
+Field naming and behaviour here were cross-checked against a real ECMWF
+production run (`rd_jaan`'s coupled `surface_model` job) and verified by
+actually running `ecland-master-dp` end to end (full 1988-2014 with hourly
+coupling, see "Domain" and "Two ecland-side source patches" above), not
+just the `ecland` repo's generic template -- notably:
+- `IFRQ_INP`/`DROFUNIT`/`DT` (CaMa-Flood) all track ecLand's own
+  `TCOUPFREQ` (coupling frequency, hours) -- *not* `TSTEP`. CaMa-Flood
+  substeps adaptively (`LADPSTP=.TRUE.`) within each `DT`, but `DT` is
+  not a free-standing nominal ceiling: CaMa-Flood requires its internal
+  `DTIN` (= `IFRQ_INP*3600`) to be an exact multiple of `DT`
+  ("`DTIN should be multiple of DT`", a hard startup check). Setting
+  `DT == DTIN` (i.e. `TCOUPFREQ*3600`, same value as `DROFUNIT`) always
+  satisfies that; `run_liaise_ecland.sh` derives all three from
+  `TCOUPFREQ` each year rather than hold them as static values that
+  could drift out of sync or violate this constraint (confirmed the hard
+  way: a static `DT=86400` aborts as soon as `IFRQ_INP*3600 < 86400`,
+  e.g. `TCOUPFREQ=1`).
+- `CMPIREGNC` (MPI region map, `mpireg.nc`) is required in `&NMAP` even
+  for a single-process run -- omitting it makes `RIVMAP_INIT` try to
+  literally open a file named `"NONE"` and abort (`PROGRAM STOP!`). It
+  must be a *single-region* map for a single-process run, not a plain
+  clip of the global decomposition -- see "`mpireg.nc`: flattened to a
+  single region" above; getting this wrong doesn't crash, it silently
+  drops most of the domain's output.
+- The observed restart-output filename convention is
+  `restart<EYEAR><EMON><EDAY><EHOUR>.nc` (e.g. `restart2025092300.nc`),
+  reconstructed from the (patched) CaMa-Flood namelist's own `NSIMTIME`
+  end-date fields via the `nml_value` helper. Don't extract these fields
+  with a plain `awk '{print $1}' | cut -d=` (as the upstream
+  `ecland_run_model.sh` reference does) -- it silently breaks once a
+  patched line has a space after `=`, which this repo's `sed_inplace`
+  patches always do.
+- `CRESTSTO` is kept as the fixed name `restartin_cmf.nc`; the script
+  symlinks/copies the previous year's saved CaMa-Flood restart to that
+  name, the same way it already does for ecLand's own restart via
+  `RESTART_IN_NAME`.
+- `-cinv` (1-way only, dummy inverse weights) in
+  `derive_cmf_weights.sh` is deliberate, matching `LECMF2LAKEC=0` /
+  `LECMF1WAY` (1-way) in `namelist/create_liaise_namelist.sh` -- 2-way
+  coupling would need the weights regenerated with `COMPUTE_INV=true`.
+- Neither driver script uses `srun` to launch `$ECLAND_EXE`, even when
+  `srun` is available: invoking it as a job step from inside an
+  already-running shell (interactive `run_liaise_ecland.sh`) or from
+  inside the sbatch job itself (`run_liaise_ecland.slurm`) does not
+  reliably inherit the shell's module-loaded environment on this
+  cluster -- observed concretely as the step landing on its allocated
+  node without `hpcx-openmpi`'s `LD_LIBRARY_PATH`, so `$ECLAND_EXE`
+  fails to find `libmpi*.so` even with `srun --export=ALL`. Both scripts
+  run the executable directly instead.
+
+#### Validated so far: one year, not yet the full multi-year loop
+
+With both `ecland`-side patches applied and the extended-domain,
+single-region `cama_flood/data/` above, the default `NPROMA=120` (no
+workaround needed -- see the `cnt41s.F90` patch note) ran **1988 alone**
+(366 days, hourly coupling, `TCOUPFREQ=1`) cleanly: all 1405 active river
+cells produced discharge (previously 11), both ecLand and CaMa-Flood
+restarts were written, and the residual non-physical-negative-discharge
+rate was 0.13% (see "Domain" above) -- concentrated at the Rhone delta's
+bifurcation channels, a real hydraulic feature there, not a
+domain-boundary artifact.
+
+The only *multi-year* (1988-2014) run completed so far predates all three
+fixes above (fragmented 522-cell domain, the `cnt41s.F90` bug, and the
+since-abandoned `NPROMA=400` workaround that silently corrupted memory) --
+**that run's output is invalid and must not be used or treated as a
+baseline.** A full 1988-2014 run has not yet been redone against the
+fixed setup; do that (and update this note with the result) before
+relying on more than a single validated year.
 
 ## ecLand execution
 
