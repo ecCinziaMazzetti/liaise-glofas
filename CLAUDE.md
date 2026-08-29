@@ -246,11 +246,23 @@ matching `glb_15min`'s clean result), non-physical-negative-discharge rate
 0.20-0.21% (comparable to `glb_15min`'s 0.13%) but far smaller in
 magnitude (worst case -0.5 m3/s vs. `glb_15min`'s -5205 m3/s at the Rhone
 delta), and discharge magnitudes were physically plausible (up to ~1089
-m3/s on major rivers). `glb_03min`/`glb_01min` have not yet been tried --
-expect roughly another 4x/16x increase in in-domain 1-arcmin pixel count
-each step, so budget more memory/time headroom accordingly and confirm
-the case-table `NMAX`/`NMAXI`/`NMAXRC`/`NMAXIRC` entries for those
-resolutions still hold before trusting the result.
+m3/s on major rivers). `glb_01min` has not yet been tried -- expect roughly
+another 4x increase in in-domain 1-arcmin pixel count over `glb_03min`
+below, so budget more memory/time headroom accordingly and confirm the
+case-table `NMAX`/`NMAXI`/`NMAXRC`/`NMAXIRC` entries still hold before
+trusting the result.
+
+`glb_03min` (0.05 deg) is also validated, same method: global build 8m16s
+(`--mem=64G`; peak 5.76GB), regional derive 358x234/34137 active cells
+(4x `glb_06min`'s 179x118/8573, matching the resolution ratio again), 1988
+run 25m25s (`--mem=16G` was enough; needed `--time` above `sbatch`'s
+default 30 min headroom is thin -- gave it 30 min and it finished with
+~5 min to spare). All 34137 active cells produced finite discharge (100%),
+non-physical-negative-discharge rate 0.11-0.14% (closer to `glb_15min`'s
+0.13% than `glb_06min`'s own 0.20-0.21%), worst-case magnitude -2.9 to
+-3.0 m3/s, and peak discharge on major rivers (~1090 m3/s) matched
+`glb_06min`'s (~1089 m3/s) closely -- a good cross-resolution consistency
+check.
 
 ### Two ecland-side source patches required
 
