@@ -192,6 +192,66 @@ like a basin-clipping problem but wasn't. `derive_cmf_weights.sh` clips
 `mpireg.nc` for its grid shape, then sets every valid cell to region 1 via
 an inline Python step -- not a plain `cdo`/`ncks` clip.
 
+### Running at other resolutions: `build_global_cmf_fixdir.sh`
+
+`derive_cmf_weights.sh` needs a `FIXDIR` -- a global CaMa-Flood fix bundle
+(`ncdata.nc`, `rivpar.nc`, `outclm.nc`, `bifprm.txt`, `mpireg.nc`) at the
+chosen `CMF_RES` -- to clip. Historically the only one available was a
+colleague's personal, non-permanent work area, staged at `glb_15min` only.
+
+`cama_flood/build_global_cmf_fixdir.sh` builds that bundle at any of
+`glb_15min`/`glb_06min`/`glb_03min`/`glb_01min` directly from data already
+in the shared, permanent `CMFDIR`, so `derive_cmf_weights.sh` can be
+pointed at it (`FIXDIR=<its OUTDIR> CMF_RES=<same>`) without depending on
+that colleague's directory at all. It is a from-scratch port of ECMWF's
+own operational `create_init_clim_cmf.ksh` (E. Dutra 2019, found under
+`/ec/vol/ifs/rd/pad/ja8f/include/`) -- only the resolution-independent,
+regional-LIAISE-relevant steps are kept (river-network params, discharge
+climatology, bifurcation, MPI region, mixed kinematic/local-inertia mask);
+the global *atmospheric*-grid `inpmat.nc` that script also builds (an
+IFS-climatology-grid product) is not ported, since `derive_cmf_weights.sh`
+derives LIAISE's own `inpmat.nc` separately.
+
+Three companion Python tools that script depends on
+(`calc_outclm.py`/`calc_rivpar.py`/`gen_mask_mixKinIner.py`) are vendored,
+unmodified except one dtype fix, into `cama_flood/vendor/` (from the same
+colleague's include directory -- otherwise-unavailable ECMWF operational
+tooling, not something to reimplement). `calc_outclm.py` needed one local
+fix: it called our patched `cython_ext`'s `remap()` with `float32` input,
+but that function expects `float64` -- see the comment in the vendored
+copy.
+
+Both this script and `derive_cmf_weights.sh` rebuild the `create_forcing`
+Cython extension automatically if missing or stale, so the `-e`/`continue`
+patch above is always in effect.
+
+Run it as a proper `sbatch` job, not on the interactive login node: the
+global 1-arcmin catchment map (`1min.catmxy.nc`, 233M points) it loads
+briefly pushes memory usage high enough (for a few seconds, mid-run) to
+trigger what looks like a login-node memory watchdog -- repeated,
+inconsistent `SIGKILL`s were observed there regardless of launch method
+(plain `&`, `nohup`+`disown`, `run_in_background`), even though total
+system memory headroom was never actually exhausted (`free -h`). Under
+`sbatch --mem=48G` the whole build completes in under two minutes at every
+resolution tried so far. (Also true of `derive_cmf_weights.sh` itself for
+the same reason -- submit it the same way.)
+
+**Validated so far**: `glb_06min` (0.1 deg), built, derived (see "Domain"
+above -- 179x118 clipped grid, 8573 active river cells, exactly 2.5x
+`glb_15min`'s 73x49/1405, matching the resolution ratio), and run for 1988
+alone with `LPROD=.FALSE.` (all ecLand `o_*.nc` output off, since only the
+CaMa-Flood coupling was of interest) and CaMa-Flood's own `IFRQ_OUT=24`:
+6m50s wall-clock, all 8573 active cells produced finite discharge (100%,
+matching `glb_15min`'s clean result), non-physical-negative-discharge rate
+0.20-0.21% (comparable to `glb_15min`'s 0.13%) but far smaller in
+magnitude (worst case -0.5 m3/s vs. `glb_15min`'s -5205 m3/s at the Rhone
+delta), and discharge magnitudes were physically plausible (up to ~1089
+m3/s on major rivers). `glb_03min`/`glb_01min` have not yet been tried --
+expect roughly another 4x/16x increase in in-domain 1-arcmin pixel count
+each step, so budget more memory/time headroom accordingly and confirm
+the case-table `NMAX`/`NMAXI`/`NMAXRC`/`NMAXIRC` entries for those
+resolutions still hold before trusting the result.
+
 ### Two ecland-side source patches required
 
 Both are in the **`ecland` repo**, not this one -- a fresh `ecland`

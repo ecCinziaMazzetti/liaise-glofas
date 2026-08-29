@@ -21,8 +21,13 @@ init_clim/work/
 # Externally copied Python dependency
 init_clim/osm_pyutils/
 
-# CaMa-Flood weight-derivation scratch space
+# CaMa-Flood weight-derivation scratch space (default ./work/, plus
+# resolution-tagged variants such as work_06min/, and
+# build_global_cmf_fixdir.sh's own work_global*/ output/scratch dirs)
 cama_flood/work/
+cama_flood/work_*/
+cama_flood/work_global/
+cama_flood/work_global_scratch/
 
 # ... except the validated, LIAISE-derived reference files (Git LFS), which
 # would otherwise be caught by the *.nc rule above.
