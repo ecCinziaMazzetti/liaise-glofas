@@ -233,7 +233,7 @@ cat > "$OUTDIR/input" <<NAMELIST
   LBVOC_EMIS=$LBVOC_EMIS.      ! LOGICAL : TURN usage of online bvoc emission computation
   LESNML=$LESNML           ! LOGICAL : TURN THE MULTI-LAYER SNOW SCHEME
   LECMF1WAY=${LECMF1WAY:-false} ! Logical : Turn on Coupling with CaMa-Flood
-  NCMF2LAKEC=${NCMF2LAKEC:-0} ! Integer: 2way coupling : 0 -> off, 1 -> replace , 2 -> add
+  NCMF2LAKEC=${LECMF2LAKEC:-0} ! Integer: 2way coupling : 0 -> off, 1 -> replace , 2 -> add
   LESSDP_CALIB=${LESSDP_CALIB:-false} ! Logical : Turn on the calibration of the surface spatially distributed parameters
   NCWS=$NCWS               ! Number of layers to merge at the end for the soil water profile (for > 4layers)
   /
