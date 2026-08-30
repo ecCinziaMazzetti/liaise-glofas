@@ -113,10 +113,25 @@ WORKDIR=${WORKDIR:-./work}
 # LIAISE's dx (0.5) doesn't match either of that table's explicit dx cases
 # (0.25/0.10), so it falls to its wildcard row. Verified comfortably above
 # the observed max (11 levels) with the extended domain.
+#
+# WARNING: NMAX is not just a safety margin -- gen_inpmat.py's find_inpn()
+# preallocates inpa/inpx/inpy at (NMAX, nlat, nlon) of the *global*
+# (unclipped) FIXDIR/ncdata.nc grid, not the clipped regional one. At
+# glb_01min that global grid is 10800x21600 (233M cells), so the generic
+# wildcard default here (NMAX=100) tried to allocate a ~186GB float64
+# array and got EC_MEMKILL'd well before doing any real work, even under
+# --mem=128G (the qos=nf cap) -- confirmed the hard way. The actual value
+# needed is small and resolution-independent (it just counts how many
+# coarse 0.5deg ecLand cells overlap one fine river-network cell -- 5-11
+# in every case observed here regardless of CMF_RES), so NMAX=10 is ample
+# headroom at glb_01min while keeping the array under ~40GB. If adding a
+# case for a still-finer resolution, do not fall through to the wildcard;
+# size NMAX by this same reasoning instead of guessing.
 case ${CMF_RES} in
   glb_15min) NMAX=156; NMAXI=40  ;;
   glb_06min) NMAX=23;  NMAXI=78  ;;
   glb_03min) NMAX=48;  NMAXI=152 ;;
+  glb_01min) NMAX=10;  NMAXI=40  ;;
   *)         NMAX=100; NMAXI=100 ;;
 esac
 

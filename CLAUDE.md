@@ -264,6 +264,40 @@ non-physical-negative-discharge rate 0.11-0.14% (closer to `glb_15min`'s
 `glb_06min`'s (~1089 m3/s) closely -- a good cross-resolution consistency
 check.
 
+`glb_01min` (1 arcmin, the native resolution of the underlying catchment
+data) needed real fixes, not just a bigger time budget:
+
+- **Global build**: `rivseq`/`i1seq` inside `calc_outclm.py` (via
+  `cython_ext.calc_1d_seq_rivseq`) each took ~2h45m against the full
+  55.8M-point global river network -- a ~59x slowdown over `glb_03min`'s
+  167s for what's only a ~9x bigger network, i.e. this step is
+  worse-than-linear at this scale. Total global build: 5h39m under
+  `--mem=128G` (peak 34.7GB) and `--time=20:00:00`.
+- **Regional derive**: failed outright the first time -- `EC_MEMKILL`
+  (ECMWF's cgroup memory watchdog; it applies to `sbatch` jobs too, not
+  just the interactive login node) even under `--mem=128G`. Root cause: a
+  real bug, now fixed -- see the `NMAX`/`derive_cmf_weights.sh` note
+  right above the resolution case table. The wildcard default (`NMAX=100`)
+  silently sized an allocation off the *global* `FIXDIR` grid
+  (10800x21600 at this resolution), not the clipped regional one, trying
+  to allocate a ~186GB array before doing any real work. Fixed by adding
+  an explicit `glb_01min) NMAX=10` case (observed max actually needed:
+  4) -- any future finer-resolution case must size `NMAX` the same way,
+  not fall through to the wildcard. After the fix: 9m58s, grid
+  1067x697/306420 active cells (~9x `glb_03min`, matching the resolution
+  ratio).
+- **Single-year run**: also needed far more than the `sbatch` default --
+  an 8-hour attempt got killed by the time limit only 53% of the way
+  through 1988 (reached day 195 of 366), extrapolating to ~15h for the
+  full year (a ~36x slowdown over `glb_03min`'s 25 minutes, from ~9x more
+  active cells compounding with a much smaller CaMa-Flood adaptive
+  substep at this grid spacing -- `NT=83` substeps per hourly coupling
+  step, vs. far fewer at coarser resolutions). Resubmitted at
+  `--time=20:00:00`; not yet complete as of this note -- update this
+  section (or move this bullet up to a validated one) once it finishes
+  and the discharge output has been checked the same way as the other
+  three resolutions.
+
 ### Two ecland-side source patches required
 
 Both are in the **`ecland` repo**, not this one -- a fresh `ecland`
