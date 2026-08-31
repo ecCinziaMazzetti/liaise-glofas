@@ -293,10 +293,24 @@ data) needed real fixes, not just a bigger time budget:
   active cells compounding with a much smaller CaMa-Flood adaptive
   substep at this grid spacing -- `NT=83` substeps per hourly coupling
   step, vs. far fewer at coarser resolutions). Resubmitted at
-  `--time=20:00:00`; not yet complete as of this note -- update this
-  section (or move this bullet up to a validated one) once it finishes
-  and the discharge output has been checked the same way as the other
-  three resolutions.
+  `--time=20:00:00` and got much further -- CaMa-Flood itself completed
+  the entire year cleanly (reached 1988-12-31, wrote its own annual
+  restart) -- but ecLand then died with SIGBUS (exit 135) at 12h13m
+  elapsed, with no application-level error/traceback anywhere in the log.
+  That signature (abrupt OS-level kill, no diagnostic, deep in very large
+  I/O -- the daily CaMa-Flood output files are ~1GB each at this
+  resolution) points to a one-off NFS/filesystem glitch during the final
+  restart write, not a reproducible bug in the code or namelist (`/perm`
+  itself had 159TB free at the time, so not a quota/disk-full issue).
+  **Not retried** -- given the cost (12h+ per attempt) versus the marginal
+  value over the already-validated glb_15min/06min/03min results, this
+  was deliberately left unresolved rather than spending another ~12h on
+  a plausibly-transient failure. The build and regional-derive steps
+  above are still fully validated and usable; only the single-year
+  discharge/water-balance check remains undone at this resolution. If
+  revisiting, retry the run as-is first (same weights, same namelists,
+  under `cama_flood/work_01min/` and the `liaise_cmf_test/` test harness)
+  before assuming a real bug.
 
 ### Two ecland-side source patches required
 
@@ -401,9 +415,18 @@ just the `ecland` repo's generic template -- notably:
   name, the same way it already does for ecLand's own restart via
   `RESTART_IN_NAME`.
 - `-cinv` (1-way only, dummy inverse weights) in
-  `derive_cmf_weights.sh` is deliberate, matching `LECMF2LAKEC=0` /
-  `LECMF1WAY` (1-way) in `namelist/create_liaise_namelist.sh` -- 2-way
-  coupling would need the weights regenerated with `COMPUTE_INV=true`.
+  `derive_cmf_weights.sh` is deliberate, matching `NCMF2LAKEC=0` (default,
+  1-way) in `namelist/create_liaise_namelist.sh` -- 2-way coupling needs
+  the weights regenerated with `COMPUTE_INV=true`. Note `NCMF2LAKEC` is an
+  *integer* namelist parameter (matches the Fortran name in `ecland`'s
+  `YOEPHY` exactly) and, like every other `N`-prefixed integer in
+  `create_liaise_namelist.sh` (`NCSS`, `NCWS`, `NDLEVEL`, ...), is set via
+  an identically-named env var -- `NCMF2LAKEC=2`, not `LECMF2LAKEC=2`. The
+  `LE`-prefixed alias convention used elsewhere in that script only
+  applies to *logical* flags (`LECMF1WAY` among them); don't extend it to
+  this one -- a same-session attempt to "fix" a perceived naming mismatch
+  here by aliasing `NCMF2LAKEC` to `LECMF2LAKEC` was itself wrong and was
+  reverted (see git history, `d5480bc`).
 - Neither driver script uses `srun` to launch `$ECLAND_EXE`, even when
   `srun` is available: invoking it as a job step from inside an
   already-running shell (interactive `run_liaise_ecland.sh`) or from
@@ -433,6 +456,36 @@ since-abandoned `NPROMA=400` workaround that silently corrupted memory) --
 baseline.** A full 1988-2014 run has not yet been redone against the
 fixed setup; do that (and update this note with the result) before
 relying on more than a single validated year.
+
+#### 2-way coupling (`NCMF2LAKEC=2` / `LWEVAP=true`): does it increase evaporation?
+
+Yes, validated at `glb_15min`, single year 1988, `LECMF1WAY=true` (always
+required to turn coupling on at all -- see the `NCMF2LAKEC` bullet above)
+with `NCMF2LAKEC=2` ("add" mode: CaMa-Flood's floodplain fraction is
+added to ecLand's own lake-tile cover, `VFCLAKEF`, over land points --
+`cnt41s.F90`) and CaMa-Flood's own `LWEVAP=true` (extracts evaporation
+from its floodplain storage, `namelist/input_cmf`). Requires weights
+re-derived with `COMPUTE_INV=true` (real inverse mapping; the committed
+`cama_flood/data/` only has dummy 1-way weights).
+
+Two independent, distinguishable increases, against a 1-way/`LWEVAP=false`
+control run generated the same way:
+- ecLand's own open-water evaporation (`EWater` in `o_eva.nc`, needs
+  `LPROD=.TRUE.` -- the default -- since this test cares about ecLand's
+  own output, unlike the resolution-scaling tests above) rose ~19.5%
+  domain/year mean. The other evap components (`ECanop`, `TVeg`, `ESoil`,
+  `SubSnow`) barely moved (<0.06%), so this is a clean, isolated signal
+  from the added lake fraction, not noise.
+- CaMa-Flood's own floodplain evaporation (`o_wevap.nc`) goes from
+  *zero time records written at all* under `LWEVAP=false` (the variable
+  exists in the namelist but nothing is extracted) to a fully populated
+  366-day field under `LWEVAP=true` (domain mean 0.0023 m3/s, peak 10.7
+  m3/s across active cells) -- a wholly separate loss term that doesn't
+  exist in 1-way mode.
+
+Total domain evap barely shifts (+0.08%) because open water is a small
+tile fraction here -- the effect is real but localized to lake/floodplain
+cells, not a domain-wide signal.
 
 ## ecLand execution
 
