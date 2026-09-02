@@ -1,7 +1,14 @@
+![LIAISE ecLand](docs/liaise-ecland-banner.png)
+
 # LIAISE ecLand workflow
 
 Scripts and configuration for preparing and running ecLand over the LIAISE
 domain using WFDE5-CRU-GPCC forcing.
+
+To learn more about the LIAISE field campaign, see the
+[LIAISE data portal](https://liaise.aeris-data.fr/) and, for details on the
+meteorological forcing adopted here, the
+[LIAISE forcing wiki](https://gitlab.in2p3.fr/ipsl/lmd/intro/liaise-forcing/-/wikis/home).
 
 ## Workflow
 
