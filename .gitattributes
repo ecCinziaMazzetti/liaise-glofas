@@ -6,3 +6,4 @@ cama_flood/data/rivclim.nc filter=lfs diff=lfs merge=lfs -text
 cama_flood/data/rivpar.nc filter=lfs diff=lfs merge=lfs -text
 cama_flood/data/outclm.nc filter=lfs diff=lfs merge=lfs -text
 cama_flood/data/mpireg.nc filter=lfs diff=lfs merge=lfs -text
+cama_flood/data/liaise_grdc_observations.nc filter=lfs diff=lfs merge=lfs -text

@@ -676,6 +676,65 @@ Full comparison data (7-point time series, correlations, ratios) is at
 a plot at `.../fortran_vs_gpu_ebro_2000.png` (both outside this repo, not
 committed data).
 
+### Real gauge observations: `cama_flood/extract_liaise_grdc_observations.py`
+
+A third, independent validation arm alongside the Fortran-vs-GPU comparison
+above: real river-gauge discharge, not just model-vs-model.
+
+Source data (both "internal ECMWF assets" per `ifs-riverbench`'s own
+README, at `/perm/pad/flood_cases/Stations/` on this filesystem -- not
+redistributed by that repo or this one; only this script's small filtered
+output is committed):
+- The station metadata CSV (`allstations_v1.3.csv`), which conveniently
+  carries each station's pre-computed CaMa-Flood glb_15min lookup cell
+  (`Cama15lon`/`Cama15lat`/`Cama15area`) -- no fuzzy nearest-neighbor
+  matching needed against `cama_flood/data/*.nc`.
+- The Qobs archive (`Qobs_24_1980-2025_withcaravan.zarr`/`.nc`), daily
+  discharge per station, keyed by `statid` (matches the CSV's `Id`).
+
+**GRDC-only, basin-filtered, not just a lat/lon box.** Kept only stations
+with `Source=="Caravan"` and `Provid` starting `GRDC_` -- the same
+public-domain (Global Runoff Data Centre, via the GRDC-Caravan extension of
+Caravan) filter `ifs-riverbench`'s own `prepare_public_bundle.py` uses to
+decide what's safe to redistribute (see that repo's `2026-09-11` commit).
+A naive Ebro-region bounding box is NOT enough on its own: several GRDC
+stations that fall inside one are actually on entirely separate river
+systems (Tagus, Turia, Jucar, Llobregat, Ter, Bidasoa all have gauges
+nearby). The script instead matches each station's `Cama15lat`/`Cama15lon`
+cell against `ncdata.nc`'s own `basin` field and keeps only stations
+CaMa-Flood's own glb_15min network considers connected to the same basin as
+the Ebro-mouth cell used in the discharge comparison above. A few real-world
+Ebro tributaries with small catchments (under ~200 km2) don't survive this
+filter -- glb_15min's coarse river-network delineation doesn't always
+resolve them as connected to the main network; a genuine CaMa-Flood
+resolution limitation, not a bug in the filter.
+
+**Result**: 7 gauges survive, 1988-2014 daily discharge, saved to
+`cama_flood/data/liaise_grdc_observations.nc` (Git LFS, 360KB): Cinca at
+Fraga (9637 km2, mean 64 / max 1036 m3/s), Guadalope at Caspe (3780 km2,
+mean 1.3 / max 319 -- low baseflow is real, this one's regulated), Jiloca
+at Calamocha (1489 km2, mean 1.7 / max 17 -- also real, a karstic losing
+stream), Cinca at Lafortunada (449 km2, mean 13 / max 133), Fortanete (274
+km2, mean 1.5 / max 23), Arba de Luesia at Biota (142 km2, mean 0.4 / max
+14), Vero at Lecina de Barcabo (102 km2, mean 1.1 / max 44) -- all
+physically plausible for these specific, mostly semi-arid/karstic Iberian
+tributaries.
+
+**Not yet done**: no actual numeric comparison of these observations against
+either the Fortran or GPU discharge output above -- `cama15_iy`/`cama15_ix`
+in the saved NetCDF are the exact grid indices into `cama_flood/data/*.nc`
+(and therefore into `o_totout.nc`) needed for that, so it's a direct index,
+not a repeat of the nearest-neighbor/local-max matching work the Fortran-GPU
+comparison needed.
+
+One real bug caught while writing this script, worth remembering:
+netCDF4's fixed-width `S1` char-array dtype silently garbles text if you
+assign it a list of raw byte-integers (e.g. from `list(some_bytes_object)`)
+-- each int gets cast through `str()` and truncated to one character
+(byte 82 -> `"82"` -> `"8"`), corrupting every name with no error raised.
+Fixed by using netCDF4's variable-length string type (`createVariable(...,
+str, ...)`) instead, which needs no manual byte-padding at all.
+
 ## ecLand execution
 
 `run/run_liaise_ecland.sh`
