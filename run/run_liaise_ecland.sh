@@ -54,6 +54,15 @@ mkdir -p "$LOG_DIR" "$OUTPUT_ROOT" "$RESTART_ROOT" "$WORK_ROOT"
 SURFCLIM_SOURCE=${SURFCLIM_SOURCE:-${STATIC_DIR}/surfclim}
 SOILINIT_SOURCE=${SOILINIT_SOURCE:-${STATIC_DIR}/soilinit}
 
+# Optional: seed the very first forcing year's restart, for a spin-up pass
+# (e.g. re-running the same year twice, or picking up land-surface state
+# already spun up by a separate long continuous run) rather than always
+# cold-starting from SOILINIT_SOURCE. Left empty (default), behaviour is
+# unchanged: the first year uses SOILINIT_SOURCE and LNF stays as the
+# namelist has it (normally .TRUE., cold start).
+INITIAL_RESTART=${INITIAL_RESTART:-}
+INITIAL_RESTART_CMF=${INITIAL_RESTART_CMF:-}
+
 RESTART_IN_NAME=${RESTART_IN_NAME:-restart_in.nc}
 RESTART_OUT_NAME=${RESTART_OUT_NAME:-restartout.nc}
 
@@ -253,8 +262,8 @@ printf '  %s\n' "${forcing_files[@]}"
 # -------------------------
 # Main annual loop
 # -------------------------
-previous_restart=""
-previous_restart_cmf=""
+previous_restart="$INITIAL_RESTART"
+previous_restart_cmf="$INITIAL_RESTART_CMF"
 
 for forcing_file in "${forcing_files[@]}"; do
     base=$(basename "$forcing_file")

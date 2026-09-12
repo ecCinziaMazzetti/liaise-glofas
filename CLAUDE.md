@@ -683,6 +683,54 @@ Full comparison data (7-point time series, correlations, ratios) is at
 a plot at `.../fortran_vs_gpu_ebro_2000.png` (both outside this repo, not
 committed data).
 
+### CaMa-Flood-GPU river-storage spin-up + 5-year run (2026-09-12)
+
+The single-year GPU runs above (2000) all started `river_storage`/
+`river_depth` from zero -- `parameters_liaise.nc`'s `init_state` fields are
+zero since it's sliced from a freshly-built `parameters.nc`, with no
+restart mechanism used. This is the CaMa-Flood-side counterpart of a gap
+the paired Fortran runs also had for ecLand's own land state (fixed there
+via `run_liaise_ecland.sh`'s new `INITIAL_RESTART`/`INITIAL_RESTART_CMF`
+env vars) -- the driving runoff (`run/output/<year>/o_wat.nc`) comes from
+ecLand's own continuous 1988-2014 restart chain so the LAND state feeding
+CaMa-Flood-GPU was already realistic, but CaMa-Flood's own river storage
+was not.
+
+**Fix, verified to matter**: `scripts_user/run_liaise_year_spinup.py`
+(CaMa-Flood-GPU checkout) runs the same year twice in one process --
+`model.save_state()` returns a complete `InputProxy` (topology + params +
+end-of-run state) fed directly into a second `CaMaFlood` construction, no
+restart file needs to be written to disk for this. Checked on 2000: pass 1
+vs pass 2 domain-mean discharge diverges sharply early (day 1: 12.7 vs
+112.9 m3/s) and converges to bit-for-bit identical by year-end (both
+108.01 m3/s in the last week) -- confirms the cold start is a real,
+multi-month transient bias, not a rounding difference, and that the model
+does reach the same steady dynamics regardless of starting condition.
+
+**Ran all 5 comparison years this way** (1988, 1995, 2000, 2003, 2005 --
+same years as the multi-year GRDC skill benchmark below): pass 2's daily
+discharge, keyed by `catchment_id`/lon/lat, is at
+`/perm/pad/CaMa-Flood-GPU-run/out/liaise/liaise_<year>_discharge_daily_spunup.nc`
+-- use THESE, not the earlier non-spun-up `liaise_<year>_discharge_daily.nc`
+files, for any skill/bias comparison against real observations or the
+Fortran reference. Domain-mean effect is modest annually (e.g. 2000: 57.3
+-> 58.7 m3/s, +2.4%) since it dilutes across 1405 catchments of very
+different response times, but will matter much more for the 7 individual
+GRDC-gauge comparison points during the first few months of each year --
+check that explicitly rather than assuming the modest domain-mean shift
+means it doesn't matter per-gauge.
+
+2003 also produced a real, historically-grounded sanity check while
+reviewing this: a sharp discharge spike (day 2003-12-03, peak 31,508 m3/s)
+at catchment 531544 (4.84E, 43.33N) -- the Rhone delta near Arles/Camargue,
+and early December 2003 is the real, well-documented Rhone flood event.
+The hydrograph shape (smooth week-long rise and fall, not a runaway or
+oscillation) and the adjacent catchment's negative value (531545, matching
+the already-documented Rhone-delta bifurcation artifact) both confirm this
+is genuine hydraulics being resolved correctly, not a numerical instability
+-- worth knowing before anyone sees a ~30x-normal spike in this domain's
+output and assumes it's a bug.
+
 ### Real gauge observations: `cama_flood/extract_liaise_grdc_observations.py`
 
 A third, independent validation arm alongside the Fortran-vs-GPU comparison
@@ -727,13 +775,6 @@ km2, mean 1.5 / max 23), Arba de Luesia at Biota (142 km2, mean 0.4 / max
 physically plausible for these specific, mostly semi-arid/karstic Iberian
 tributaries.
 
-**Not yet done**: no actual numeric comparison of these observations against
-either the Fortran or GPU discharge output above -- `cama15_iy`/`cama15_ix`
-in the saved NetCDF are the exact grid indices into `cama_flood/data/*.nc`
-(and therefore into `o_totout.nc`) needed for that, so it's a direct index,
-not a repeat of the nearest-neighbor/local-max matching work the Fortran-GPU
-comparison needed.
-
 One real bug caught while writing this script, worth remembering:
 netCDF4's fixed-width `S1` char-array dtype silently garbles text if you
 assign it a list of raw byte-integers (e.g. from `list(some_bytes_object)`)
@@ -741,6 +782,79 @@ assign it a list of raw byte-integers (e.g. from `list(some_bytes_object)`)
 (byte 82 -> `"82"` -> `"8"`), corrupting every name with no error raised.
 Fixed by using netCDF4's variable-length string type (`createVariable(...,
 str, ...)`) instead, which needs no manual byte-padding at all.
+
+### 5-year discharge skill benchmark: Fortran vs CaMa-Flood-GPU vs GRDC (2026-09-12)
+
+`cama_flood/skill_benchmark_fortran_vs_gpu.py`
+
+Answers the question the earlier model-vs-model comparison couldn't: not
+just "do the two CaMa-Flood versions agree with each other" but "which one
+is actually closer to reality." Scores both against the 7 real GRDC gauges
+(`cama_flood/data/liaise_grdc_observations.nc`) for 5 years spanning the
+observed flow range at those gauges -- 1988 (wettest), 2003 (2nd-wettest),
+2000 (near-normal), 1995 (dry), 2005 (driest), chosen from the GRDC data's
+own annual flow index, not assumed.
+
+**Both sides needed a river-storage spin-up fix first**, caught by the user
+asking about ecLand's own `NLOOP` spin-up convention (a real, documented
+option in `ecland_run_experiment.sh`/`ecland_run_model.sh`, re-running a
+period multiple times and chaining the restart so land and river state
+equilibrate before the scored pass): every earlier single-pass Fortran run
+in this file (including the original 2000 comparison) cold-started BOTH
+ecLand's soil state and CaMa-Flood's river storage from scratch each year --
+an asymmetric handicap versus the GPU side, whose driving runoff
+(`run/output/<year>/o_wat.nc`) already came from ecLand's own continuous
+1988-2014 restart chain (land state pre-spun-up), while CaMa-Flood-GPU's
+own river storage was separately found to have the identical cold-start gap
+(see "CaMa-Flood-GPU river-storage spin-up" above). Both now fixed with a
+2-pass same-year spin-up: Fortran via `run_liaise_ecland.sh`'s new
+`INITIAL_RESTART`/`INITIAL_RESTART_CMF` env vars (small, additive -- lets a
+single-year run seed its starting restart instead of always cold-starting
+from `soilinit`; land starts from the already-spun-up
+`run/output/<year>/restart_in.nc` where available, 1988 excepted since it's
+the first year of that chain), GPU via CaMa-Flood-GPU's own
+`save_state()`/reconstruction (see that section). Verified this matters:
+GPU's spin-up shifted 2000's domain-mean discharge from 57.3 to 58.7 m3/s
+and, more importantly, fixed a multi-month cold-start transient concentrated
+in exactly the early-year period the gauge comparison is sensitive to.
+
+**Result** (KGE, correlation, PBIAS; `RIO GUADALOPE, CASPE` excluded from
+these aggregates -- see below): **Fortran beats GPU on KGE in 19 of 25
+station-years (76%)**, median KGE -0.155 (Fortran) vs -2.231 (GPU).
+Correlation is similar between the two (median r 0.34 vs 0.41 -- GPU is not
+worse at capturing *timing*), so the skill gap is a magnitude-bias story,
+and the bias runs in OPPOSITE, consistent directions: Fortran
+under-predicts almost everywhere (23/25 station-years negative PBIAS,
+median -36%), GPU over-predicts more often than not (16/25 positive,
+median +60%). This lines up exactly with the channel-width finding from the
+single-year Ebro-mainstem comparison (`static_network_nc_v2.1`'s wider
+channels vs `cmf_v430_pkg`'s narrower ones, `Q ~ width^-2/3` at fixed
+storage) -- here it shows up as a real, measurable skill cost for the
+narrower-channel (GPU) version at real gauges, not just a number the two
+models disagree on.
+
+Both models still struggle in an absolute sense at most of these gauges
+(mostly negative KGE/NSE, i.e. neither beats a simple mean-flow benchmark)
+-- expected, not a defect: these are small headwater/tributary catchments
+(102-9637 km2, all but one under 4000 km2) being resolved by a 0.25deg
+global river network whose grid cells are themselves comparable in size to
+several of these basins. `RIO CINCA, FRAGA` (9637 km2, much closer to a
+grid-cell-scale catchment) has the best skill on both sides, consistent
+with this being a genuine resolution/scale-mismatch limitation rather than
+a bug.
+
+**`RIO GUADALOPE, CASPE` excluded from the aggregates above, not from the
+raw results**: a heavily regulated river (dam/irrigation controlled), real
+discharge is near-zero for long stretches in several of these years, which
+sends KGE/NSE to astronomical negative values (variance-based metrics
+divide by near-zero) -- a metric artifact, not a meaningful skill signal at
+this specific gauge. Left in `skill_benchmark_results.json` for anyone who
+wants it, just excluded from the printed medians.
+
+Full per-station-year results at
+`/perm/pad/liaise_discharge_compare/skill_benchmark_results.json` and a
+summary plot at `.../skill_benchmark.png` (both outside this repo, not
+committed data -- same convention as the earlier single-year comparison).
 
 ## Point observations: `landbench/`
 
