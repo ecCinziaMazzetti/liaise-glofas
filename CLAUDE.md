@@ -540,6 +540,142 @@ python3 inpmat_to_cmfgpu_npz.py \
   `.npz`'s schema (`cmfgpu_liaise.spatial_mapping.inverse.v1`) is this
   script's own proposal, not an established Hydroforge convention.
 
+### First CaMa-Flood-GPU run on the LIAISE domain: validated, 2026-09-12
+
+Ran CaMa-Flood-GPU end-to-end on LIAISE for year 2000, driven by ecLand's
+own runoff -- not just the weight conversion above, an actual regional
+simulation. Three real correctness issues were caught and fixed along the
+way; read these before trusting or extending this pipeline.
+
+**The pipeline** (all in `cama_flood/`, paired with a driver script kept in
+the CaMa-Flood-GPU checkout's own gitignored `scripts_user/` --
+`run_liaise_2000.py` there, not committed here):
+1. `subset_parameters_for_liaise.py`: slices CaMa-Flood-GPU's GLOBAL
+   `parameters.nc` (built once via its own `make_map_params.py` against the
+   official `cmf_v430_pkg` map package, glb_15min) down to a self-contained
+   LIAISE regional network.
+2. `inpmat_to_cmfgpu_npz.py --ncdata ...`: the runoff mapping (now extended
+   to the full domain -- see below).
+3. `prepare_liaise_runoff_for_cmfgpu.py`: `Qs - Qsb` from
+   `run/output/2000/o_wat.nc` into a single-variable NetCDF.
+4. `run_liaise_2000.py` (CaMa-Flood-GPU checkout): drives the model,
+   `base` + `adaptive_time` modules only (bifurcation dropped for this
+   first pass -- see `subset_parameters_for_liaise.py`'s docstring).
+5. `export_liaise_daily_discharge.py`: hourly -> daily discharge, keyed by
+   `catchment_id`/`longitude`/`latitude`, for comparison against a Fortran
+   reference (e.g. `o_totout.nc`).
+
+**Issue 1 -- domain size: 1026 vs 1405 catchments.** `MappingTable._local()`
+(Hydroforge) hard-errors unless every catchment the model loads is present
+in the mapping's `target_ids`. The model needs the FULL `ncdata.nc`
+`ctmare > 0` footprint (1405 catchments -- matches the "1405 active river
+cells" figure documented above for this exact domain), but `inpmat.nc`
+itself only links the 1026 cells with a direct ecLand-grid overlap; the
+other 379 are real routing-only cells (inside the extended domain, outside
+the ecLand grid's exact box). Fixed in `inpmat_to_cmfgpu_npz.py`: when
+`--ncdata` is given, it now extends `target_ids` to the full active
+footprint with all-zero rows for the 379 (correct -- they truly get zero
+local runoff). Verified: downstream connectivity of the full 1405-cell set
+closes with **zero leaks** against the global network (every catchment's
+`downstream_id` is either a self-referencing mouth or another catchment in
+the set) -- confirming 1405, not 1026, is the right self-contained domain.
+
+**Issue 2 -- sign convention bug, caught before it drove the model.**
+`Qs` (surface runoff) is a positive outward flux, but `Qsb` (subsurface
+runoff) is signed as a NEGATIVE soil-column-loss term in ecland's own
+water-budget convention. Naively computing `Qs + Qsb` gives max()==0.0
+across the entire year (63.8% of all values negative) -- an unmistakable
+tell, caught by checking the preprocessed data's own summary stats before
+running anything. `Qs - Qsb` gives min==0.0 exactly (zero negative values,
+any cell, any hour, all year) and a domain-mean annual depth of ~230
+mm/year -- physically plausible for this Mediterranean-influenced region,
+and independent confirmation the fix is right. See
+`prepare_liaise_runoff_for_cmfgpu.py`'s docstring.
+
+**Issue 3 -- unit_factor.** The bundled CaMa-Flood-GPU scripts' `e2o_ecmwf`
+example uses `unit_factor=86400000` for accumulated-mm/day source data.
+`o_wat.nc`'s `Qs`/`Qsb` are already a rate (`kg m-2 s-1`), so the correct
+factor is `1000.0` (`NetCDFDataset` DIVIDES by it: kg/m2/s / 1000 = m/s;
+the area-multiply to m3/s happens separately via the mapping regrid).
+Using `86400000` here would have silently under-forced the model by a
+factor of 86400 -- not an error, just quietly wrong output.
+
+**Result**: 8783 hourly steps (one hour short of the full year --
+`o_wat.nc`'s last record is a shared year-boundary endpoint that would
+otherwise need a `runoff_2001.nc`; dropped rather than duplicated, see
+`run_liaise_2000.py`), ~65s wall clock on 1x A100. Daily discharge: mean
+57.3 m3/s, peak 7754 m3/s (plausible for the Rhone-scale rivers this
+extended domain includes), 0.57% of hourly values negative -- same order
+of magnitude as the Fortran `LECMF1WAY` reference's 0.13% (see "Validated
+so far" above), plausibly higher here specifically because bifurcation
+(which stabilizes flow near the Rhone delta) isn't open in this pass.
+
+**Not yet done** (as of writing the above): no bifurcation module (would
+need path-endpoint filtering added to `subset_parameters_for_liaise.py`,
+mirroring its gauge filtering); no direct numeric comparison against a real
+Fortran `LECMF1WAY` discharge output. Both addressed next -- see below.
+
+### GPU-vs-Fortran discharge comparison (2026-09-12): ~2x bias, explained
+
+A parallel session ran the Fortran `LECMF1WAY` reference for the same year
+(2000) and compared discharge at 7 points along the Ebro main-stem against
+the GPU run above (matched by each side's own local discharge maxima,
+within 0.3 deg -- plain nearest-neighbor lat/lon matching was unreliable,
+occasionally snapping to an off-channel tributary catchment).
+
+**Result**: strong temporal agreement (correlation 0.67-0.96 at all 7
+points -- both models see the same storm-driven flow events, correctly
+timed) but a systematic **~2.0-2.1x GPU-over-Fortran discharge bias** at 5
+of 7 points (the other 2, closely spaced, ~1.2x -- both snapped to the same
+coarse Fortran cell, likely a matching-resolution artifact rather than a
+separate effect). Basin delineation itself checks out on both sides
+(`upstream_area` at the Ebro-mouth catchment: 84,737 km2, matching the real
+Ebro basin almost exactly).
+
+**Root cause, confirmed quantitatively, not just plausible**: channel
+width. `river_width` in the GPU's `parameters_liaise.nc` (from
+`cmf_v430_pkg`'s `rivwth_gwdlr.bin`) runs systematically narrower than the
+Fortran side's `rivwth` (`cama_flood/data/rivpar.nc`, built from the older
+`CMFDIR=static_network_nc_v2.1`). Checking `cmfgpu`'s own routing kernel
+(`cmfgpu/phys/triton/outflow.py`): `Q = width * depth *
+(1/manning)*sqrt(slope)*depth^(2/3)`, and storage ~= width*length*depth, so
+**at fixed storage, Q is proportional to width^(-2/3)** -- narrower
+channel, higher discharge, by construction of the physics, not a bug. At
+catchment 519315: Fortran `rivwth`=90.53m vs GPU `river_width`=37.94m
+(ratio 2.39x) predicts a discharge ratio of 2.39^(2/3) = 1.79x; the
+measured ratio there is 2.12x -- same direction, right order of magnitude.
+
+**It's not a simple "wrong file" fix, though.** Checked three width
+sources across all 7 points, not just the two `rivwth_gwdlr.bin` vs
+`rivwth` values that first flagged this: `cmf_v430_pkg`'s raw
+`width.bin` (unprocessed satellite width) and its own `rivwth.bin`
+(power-law-only estimate), against the Fortran side's `rivwth` (final,
+satellite-fused) AND `rivwth_par` (power-law-only, pre-fusion). None of the
+GPU-side width fields consistently matches the Fortran side's -- at one
+point raw `width.bin` matches Fortran `rivwth` almost exactly (256.76 vs
+256.76), at others it's wildly different (100.30 vs 210.68). Even the
+power-law-ONLY estimates differ by ~5x between packages (Fortran
+`rivwth_par` ~181m vs the v4.30 package's own `rivwth.bin` ~24-38m at
+these points) -- so the whole channel-geometry parameterization pipeline
+differs between the `static_network_nc_v2.1` FIXDIR and the `cmf_v430_pkg`
+test package, not just which satellite-width file got picked. There's no
+one-file swap that would reconcile them.
+
+**Conclusion**: real, expected uncertainty between CaMa-Flood map-package
+vintages (channel width is one of the least-constrained global CaMa-Flood
+parameters) -- not a bug in either the Fortran or GPU implementation, and
+not something to "fix" by tweaking either pipeline's code. A width-neutral
+comparison would need both runs built from the SAME map-package vintage,
+which isn't a config flag -- it means regenerating one side's parameters
+from the other's source data (e.g. running `subset_parameters_for_liaise.py`
+against a `parameters.nc` built from the `static_network_nc_v2.1`-era raw
+map files instead of `cmf_v430_pkg`, if those are still available; or
+reprocessing the Fortran `rivpar.nc` from `cmf_v430_pkg`'s inputs).
+Full comparison data (7-point time series, correlations, ratios) is at
+`/perm/pad/liaise_discharge_compare/fortran_vs_gpu_comparison_v2.json` and
+a plot at `.../fortran_vs_gpu_ebro_2000.png` (both outside this repo, not
+committed data).
+
 ## ecLand execution
 
 `run/run_liaise_ecland.sh`

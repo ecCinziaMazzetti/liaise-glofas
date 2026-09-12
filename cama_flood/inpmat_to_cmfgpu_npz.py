@@ -47,6 +47,17 @@ inpmat.nc + a full glb_15min CaMa-Flood-GPU map/ package on 2026-09-12):
     `matrix_shape[1]` is that source grid's full flattened size
     (`len(latin) * len(lonin)`), not just the cells actually referenced.
 
+  * When `--ncdata` is given, `target_ids` is extended (with all-zero rows)
+    to cover ncdata.nc's FULL `ctmare > 0` domain, not just the cells
+    `inpmat.nc` itself links (`nlev > 0`). Found this the hard way running
+    CaMa-Flood-GPU on the LIAISE domain (2026-09-12): Hydroforge's
+    `MappingTable._local()` hard-errors if a loaded model's catchment set
+    isn't a subset of the mapping's `target_ids`, and a real regional
+    domain (`subset_parameters_for_liaise.py`'s "extend crossing basins"
+    footprint) includes routing-only cells with no ecLand-grid overlap --
+    379 of LIAISE's 1405 active cells, verified. Those get an all-zero row
+    (zero local runoff), which is physically correct, not a workaround.
+
 Usage
 -----
     python3 inpmat_to_cmfgpu_npz.py \\
@@ -127,6 +138,84 @@ def _invert_grid_index(
             "against the CaMa-Flood map package's mapdim.txt/diminfo*.txt."
         )
     return index
+
+
+def _recover_ncdata_active_ids(
+    ncdata_path: Path,
+    *,
+    global_ny: int,
+    west: float,
+    north: float,
+    dlon: float,
+    dlat: float,
+    tolerance: float,
+) -> np.ndarray:
+    """Recover global catchment ids for every ncdata.nc cell with ctmare > 0."""
+
+    with Dataset(ncdata_path, "r") as ds:
+        ctmare = np.asarray(ds.variables["ctmare"][:].filled(0.0))
+        lat = np.asarray(ds.variables["lat"][:], dtype=np.float64)
+        lon = np.asarray(ds.variables["lon"][:], dtype=np.float64)
+
+    ix = _invert_grid_index(
+        lon, origin=west, cell_size=dlon, increasing=True,
+        tolerance=tolerance, label="ncdata.nc lon",
+    )
+    iy = _invert_grid_index(
+        lat, origin=north, cell_size=dlat, increasing=False,
+        tolerance=tolerance, label="ncdata.nc lat",
+    )
+    ix_grid, iy_grid = np.meshgrid(ix, iy)
+    cid_grid = ix_grid * global_ny + iy_grid
+    return np.unique(cid_grid[ctmare > 0].astype(np.int64))
+
+
+def _extend_to_full_ncdata_domain(
+    csr: sparse.csr_matrix,
+    target_ids: np.ndarray,
+    ncdata_path: Path,
+    *,
+    global_nx: int,
+    global_ny: int,
+    west: float,
+    north: float,
+    dlon: float,
+    dlat: float,
+    tolerance: float,
+) -> tuple[sparse.csr_matrix, np.ndarray, int]:
+    """Add zero-weight rows for ncdata.nc cells with no direct grid overlap.
+
+    `inpmat.nc` only records a link for target cells `gen_inpmat.py` found
+    at least one source-grid overlap for (`nlev > 0`). But CaMa-Flood-GPU
+    needs every catchment it will ever load (e.g. via
+    `subset_parameters_for_liaise.py`, which keeps ncdata.nc's FULL
+    `ctmare > 0` domain -- see that script's docstring for why: extended
+    "crossing basin" domains include real routing-only cells with no ecLand
+    overlap) to be present in `MappingTable.target_ids`, or
+    `MappingTable._local()` raises. Those cells legitimately get zero local
+    runoff -- an all-zero row is the correct representation, not a
+    workaround.
+    """
+
+    active_ids = _recover_ncdata_active_ids(
+        ncdata_path, global_ny=global_ny, west=west, north=north,
+        dlon=dlon, dlat=dlat, tolerance=tolerance,
+    )
+    existing = set(int(x) for x in target_ids)
+    missing = np.array(
+        sorted(int(x) for x in active_ids if int(x) not in existing),
+        dtype=np.int64,
+    )
+    if missing.size == 0:
+        return csr, target_ids, 0
+
+    extra_rows = sparse.csr_matrix(
+        (missing.size, csr.shape[1]), dtype=csr.dtype,
+    )
+    combined_ids = np.concatenate([target_ids, missing])
+    combined_csr = sparse.vstack([csr, extra_rows]).tocsr()
+    order = np.argsort(combined_ids)
+    return combined_csr[order], combined_ids[order], int(missing.size)
 
 
 def convert(
@@ -215,6 +304,16 @@ def convert(
     csr = coo.tocsr()
     csr.sum_duplicates()
 
+    n_zero_overlap_added = 0
+    if ncdata_path is not None:
+        csr, target_ids, n_zero_overlap_added = _extend_to_full_ncdata_domain(
+            csr, target_ids, ncdata_path,
+            global_nx=global_nx, global_ny=global_ny,
+            west=west, north=north, dlon=dlon, dlat=dlat,
+            tolerance=tolerance,
+        )
+        n_targets = target_ids.size
+
     coverage = np.asarray(csr.sum(axis=1)).ravel().astype(np.float32)
 
     metadata = {
@@ -248,7 +347,11 @@ def convert(
         coverage=coverage,
         metadata_json=json.dumps(metadata),
     )
-    print(f"Wrote {out_path} ({n_targets} target catchments, "
+    extra_note = (
+        f" (+{n_zero_overlap_added} zero-overlap ncdata.nc cells added)"
+        if n_zero_overlap_added else ""
+    )
+    print(f"Wrote {out_path} ({n_targets} target catchments{extra_note}, "
           f"{csr.nnz} links, matrix_shape={csr.shape})")
 
     if ncdata_path is not None:
@@ -435,14 +538,31 @@ def _print_area_diagnostics(
     if not np.any(has_ref):
         print("(area diagnostics: no matching ctmare entries found)")
         return
-    pct_diff = 100.0 * (coverage[has_ref] - ref_area[has_ref]) / ref_area[has_ref]
-    print(
-        "Area cross-check vs ncdata.nc ctmare "
-        f"({int(has_ref.sum())}/{target_ids.size} catchments matched): "
-        f"mean diff {pct_diff.mean():+.3f}%, "
-        f"|diff| p95 {np.percentile(np.abs(pct_diff), 95):.3f}%, "
-        f"max |diff| {np.abs(pct_diff).max():.3f}%"
-    )
+    # Rows with zero coverage but real ctmare are legitimate zero-overlap
+    # cells added by _extend_to_full_ncdata_domain (real catchments, just no
+    # direct ecLand-grid link) -- report them separately rather than let
+    # them show up as a spurious -100% "difference" in the area cross-check.
+    zero_overlap = has_ref & (coverage == 0)
+    checkable = has_ref & (coverage > 0)
+    if np.any(checkable):
+        pct_diff = (
+            100.0 * (coverage[checkable] - ref_area[checkable])
+            / ref_area[checkable]
+        )
+        print(
+            "Area cross-check vs ncdata.nc ctmare "
+            f"({int(checkable.sum())}/{target_ids.size} catchments with "
+            "direct overlap matched): "
+            f"mean diff {pct_diff.mean():+.3f}%, "
+            f"|diff| p95 {np.percentile(np.abs(pct_diff), 95):.3f}%, "
+            f"max |diff| {np.abs(pct_diff).max():.3f}%"
+        )
+    if np.any(zero_overlap):
+        print(
+            f"({int(zero_overlap.sum())} additional catchment(s) have real "
+            "ctmare but zero direct grid overlap -- legitimate routing-only "
+            "cells, not counted in the diff stats above)"
+        )
 
 
 def main() -> None:
