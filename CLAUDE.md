@@ -731,6 +731,45 @@ is genuine hydraulics being resolved correctly, not a numerical instability
 -- worth knowing before anyone sees a ~30x-normal spike in this domain's
 output and assumes it's a bug.
 
+#### Bifurcation module enabled to match the Fortran reference (2026-09-12)
+
+All GPU runs above had the `bifurcation` module OFF -- not for a physical
+reason, just because `subset_parameters_for_liaise.py` originally dropped
+all bifurcation data when clipping the regional domain. The Fortran LIAISE
+runs have `LPTHOUT=.TRUE.` (bifurcation on, via this repo's own
+`bifprm.txt`), so this was a real config gap between the two comparison
+runs, not a capability gap -- `cmfgpu/modules/bifurcation.py` is a working
+feature (CUDA/Triton/Metal kernels), not a stub.
+
+Fixed: `subset_parameters_for_liaise.py` now filters bifurcation paths the
+same way it already filters gauges -- kept where BOTH
+`bifurcation_catchment_id` and `bifurcation_downstream_id` fall inside the
+domain. **36 of 17242 global paths survive** into the LIAISE domain.
+`run_liaise_year.py`/`run_liaise_year_spinup.py` now open `("base",
+"adaptive_time", "bifurcation")`.
+
+**One real bug hit and fixed along the way**: `model.save_state()` (needed
+for the 2-pass spin-up) started failing with a NetCDF/HDF "Buffer is
+uncompressible" error once bifurcation was added -- a known Blosc
+small-buffer edge case, triggered by the new 36-element bifurcation arrays
+under Hydroforge's default checkpoint compression (`blosc_zstd`,
+`complevel=5`). Fixed by passing `checkpoint_netcdf_options={}` to
+`CaMaFlood(...)` (checkpoint files are tiny regardless of compression, so
+this has no real downside) -- not a bug in the bifurcation filtering logic
+itself, a compression-library edge case exposed by it.
+
+Reran all 5 years (2-pass spin-up, bifurcation on) -- daily discharge at
+`/perm/pad/CaMa-Flood-GPU-run/out/liaise/liaise_<year>_discharge_daily_spunup_bif.nc`
+(use these, not the earlier `..._spunup.nc` files without bifurcation, for
+any comparison meant to isolate the channel-width difference from
+bifurcation on/off as a config variable). Domain-mean discharge and
+negative-rate both shifted modestly and inconsistently by year (e.g. 2000's
+worst negative improved, 260-352 -> 107 m3/s; 2003's worsened slightly,
+1675 -> 1924 m3/s, during the real Rhone-flood event) -- not investigated
+further here, since isolating the net effect on GRDC skill (the actual
+question) is the next step, not a magnitude judgment on bifurcation alone
+from the domain-mean numbers.
+
 ### Real gauge observations: `cama_flood/extract_liaise_grdc_observations.py`
 
 A third, independent validation arm alongside the Fortran-vs-GPU comparison
@@ -855,6 +894,25 @@ Full per-station-year results at
 `/perm/pad/liaise_discharge_compare/skill_benchmark_results.json` and a
 summary plot at `.../skill_benchmark.png` (both outside this repo, not
 committed data -- same convention as the earlier single-year comparison).
+
+**Bifurcation, rechecked, changes nothing at these 7 gauges.** Once the
+GPU side's bifurcation config gap was closed (see "Bifurcation module
+enabled to match the Fortran reference" above), rescored with
+`skill_benchmark_fortran_vs_gpu.py --gpu-suffix _bif`: the numbers above
+are unchanged to 3 decimal places. Checked this wasn't a script bug by
+diffing the two GPU discharge files directly at each of the 7 matched
+catchments: bifurcation-on/off differs by ~1e-5 to 3e-4 m3/s at every one
+of them (float noise) despite changing ~48% of the domain's 1405
+catchments substantially elsewhere (max diff 2222 m3/s, near the Rhone
+delta and other confluence points) -- none of these 7 Ebro
+headwater/midstream tributary gauges are anywhere near one of the domain's
+36 bifurcation paths, which is physically sensible (bifurcation is a
+localized delta/braided-channel phenomenon). This is a genuine, useful
+negative result: it rules bifurcation out as a contributor to the skill
+gap, rather than leaving it as an open confound, and leaves the
+channel-width/map-package-vintage difference (`static_network_nc_v2.1` vs
+`cmf_v430_pkg`) as the sole well-isolated explanation for Fortran's
+advantage here.
 
 ## Point observations: `landbench/`
 

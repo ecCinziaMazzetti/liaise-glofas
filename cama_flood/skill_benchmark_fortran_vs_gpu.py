@@ -25,10 +25,22 @@ match_dist_deg in the saved results for every station).
 Excludes RIO GUADALOPE, CASPE from aggregate statistics: real discharge
 there is near-zero for long stretches (a regulated river, dam/irrigation
 controlled), which breaks variance-based metrics (KGE/NSE denominators
-blow up) -- not a genuine model-skill signal. Left in the raw
-skill_benchmark_results.json, just excluded from the printed summaries.
+blow up) -- not a genuine model-skill signal. Left in the raw results
+JSON, just excluded from the printed summaries.
+
+Usage
+-----
+    # default: no-bifurcation GPU run (the original comparison)
+    python3 skill_benchmark_fortran_vs_gpu.py
+
+    # bifurcation-enabled GPU run (2026-09-12 rerun, see CLAUDE.md) --
+    # confirmed to change ~48% of domain-wide GPU discharge but only
+    # ~1e-5 to 3e-4 m3/s (float noise) at these 7 gauges specifically,
+    # none of which sit near one of the domain's 36 bifurcation paths
+    python3 skill_benchmark_fortran_vs_gpu.py --gpu-suffix _bif
 """
 
+import argparse
 import datetime
 import json
 
@@ -38,7 +50,7 @@ import numpy as np
 YEARS = [1988, 1995, 2000, 2003, 2005]
 OBS_PATH = "/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/cama_flood/data/liaise_grdc_observations.nc"
 FORTRAN_TMPL = "/perm/pad/liaise_discharge_compare/run_root_fortran_{y}_final/output/{y}/o_totout.nc"
-GPU_TMPL = "/perm/pad/CaMa-Flood-GPU-run/out/liaise/liaise_{y}_discharge_daily_spunup.nc"
+GPU_TMPL = "/perm/pad/CaMa-Flood-GPU-run/out/liaise/liaise_{{y}}_discharge_daily_spunup{suffix}.nc"
 
 
 def nc_time_to_dates(var):
@@ -63,6 +75,13 @@ def nse(sim, obs):
 def pbias(sim, obs):
     return 100 * np.sum(sim - obs) / np.sum(obs)
 
+
+parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument("--gpu-suffix", default="",
+                     help="appended to the GPU discharge filename before .nc, e.g. _bif")
+args = parser.parse_args()
+gpu_tmpl = GPU_TMPL.format(suffix=args.gpu_suffix)
+results_path = f"/perm/pad/liaise_discharge_compare/skill_benchmark_results{args.gpu_suffix}.json"
 
 # --- load observations ---
 obs_ds = nc.Dataset(OBS_PATH)
@@ -90,7 +109,7 @@ for y in YEARS:
     fortran_data = np.asarray(v_fortran[:].filled(np.nan))  # (time, lat, lon)
 
     # --- GPU ---
-    f_gpu = nc.Dataset(GPU_TMPL.format(y=y))
+    f_gpu = nc.Dataset(gpu_tmpl.format(y=y))
     gpu_dates = nc_time_to_dates(f_gpu.variables["time"])
     gpu_disc = np.asarray(f_gpu.variables["discharge"][:])  # (time, catchment)
     gpu_lat = f_gpu.variables["latitude"][:]
@@ -139,7 +158,7 @@ for y in YEARS:
                 "obs_mean": float(np.mean(o_v)), "sim_mean": float(np.mean(sim)),
             })
 
-with open("/perm/pad/liaise_discharge_compare/skill_benchmark_results.json", "w") as fh:
+with open(results_path, "w") as fh:
     json.dump(results, fh, indent=2)
 
 # --- summary ---
