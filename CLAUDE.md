@@ -26,7 +26,12 @@ run/
 
 cama_flood/
   Derive the ecLand <-> CaMa-Flood interpolation weights and river-network
-  fix files for the LIAISE domain.
+  fix files for the LIAISE domain, plus real river-gauge (GRDC) discharge
+  observations for validating against it.
+
+landbench/
+  Real point (flux-tower) observations in the LIAISE region, pulled from
+  the sibling `ifs-landbench` repository's FLUXNET Shuttle run.
 
 ## Data policy
 
@@ -48,14 +53,16 @@ In particular, do not add:
 
 Respect `.gitignore`.
 
-The exception is `init_clim/data/soilinit`, `init_clim/data/surfclim`, and
-the files under `cama_flood/data/`, which are validated reference files
-tracked via Git LFS (see `.gitattributes`). These are small, LIAISE-specific
-*derived* outputs, distinct from the much larger upstream/global datasets
-they are built from (the ECMWF `climate.v021` archive, and the global
-CaMa-Flood static network data -- see `cama_flood/derive_cmf_weights.sh`),
-which must never be committed. They are also distinct from the gitignored
-`init_clim/work/`, `init_clim/output/`, and `cama_flood/work/` directories,
+The exception is `init_clim/data/soilinit`, `init_clim/data/surfclim`, the
+files under `cama_flood/data/`, and `landbench/data/`, which are validated
+reference/observation files tracked via Git LFS (see `.gitattributes`).
+These are small, LIAISE-specific *derived* or *filtered* outputs, distinct
+from the much larger upstream/global datasets they are built from (the
+ECMWF `climate.v021` archive, the global CaMa-Flood static network data --
+see `cama_flood/derive_cmf_weights.sh` -- and the `ifs-riverbench`/
+`ifs-landbench` observation archives), which must never be committed. They
+are also distinct from the gitignored `init_clim/work/`, `init_clim/output/`,
+and `cama_flood/work/` directories,
 which hold regenerated, run-specific copies.
 
 ## Forcing workflows
@@ -734,6 +741,47 @@ assign it a list of raw byte-integers (e.g. from `list(some_bytes_object)`)
 (byte 82 -> `"82"` -> `"8"`), corrupting every name with no error raised.
 Fixed by using netCDF4's variable-length string type (`createVariable(...,
 str, ...)`) instead, which needs no manual byte-padding at all.
+
+## Point observations: `landbench/`
+
+`landbench/extract_liaise_landbench_sites.py`
+
+Pulls FLUXNET Shuttle point (flux-tower) observations in the LIAISE region
+from the sibling `ifs-landbench` repository (`/perm/pad/ifs-landbench`, 775
+sites -- see that repo's own README), the point-observation counterpart to
+`cama_flood/extract_liaise_grdc_observations.py`'s river discharge.
+
+**Read the caveats in the script's own docstring before trusting or
+extending this** -- unlike the GRDC river-gauge work, there is no
+equivalent hard cross-check here:
+
+- **Geographic relevance is unverified.** The river-gauge script could
+  confirm relevance against CaMa-Flood's own basin topology (a checkable
+  fact); point sites have no equivalent structure, only a bounding box
+  (same LIAISE-region box as the discharge comparison: lat 40.5-43,
+  lon -0.75-2.0). The 3 candidates this finds (`ES-LBr`/La Bertolina,
+  `ES-PRt`/Pla de Riart, both woody savanna; `ES-VDA`/Vall d'Alinya,
+  grassland) are all Pre-Pyrenees (~42.1N), north of LIAISE's core
+  irrigated-agriculture supersite (Ivars d'Urgell / Els Plans de Sio,
+  ~41.6-41.7N per published campaign descriptions), and none are irrigated
+  cropland. They may be legitimate LIAISE contrast sites (the campaign
+  studies irrigation-driven land-atmosphere heterogeneity against
+  surrounding rainfed/natural vegetation) or simply nearby-but-unrelated
+  FLUXNET towers -- confirm against an actual LIAISE site list before
+  treating either as an official campaign observation.
+- **Only `ES-VDA` has materialized data** (forcing, `surfclim`/`surfinit`,
+  flux, and soil moisture/temperature, all copied to `landbench/data/ES-VDA/`,
+  Git LFS, ~5.8MB total). `ES-LBr`/`ES-PRt` are metadata-only in
+  `ifs-landbench` -- building them needs the FLUXNET Shuttle CLI, network
+  access, and (for physiography) an ECMWF account; not attempted here.
+- **No overlap with the main domain runs' forcing period.** `ES-VDA`'s data
+  is 2023-2024 (soil: 2022-2024); the LIAISE ecLand domain runs documented
+  above use 1988-2014 WFDE5-CRU-GPCC. Comparing this site means a separate,
+  standalone point run using its own bundled `surfclim`/`surfinit`/forcing
+  -- not extractable from the existing domain output.
+
+**Not yet done**: no ecLand point run at `ES-VDA` has actually been made or
+scored against its flux/soil observations -- this is the input bundle only.
 
 ## ecLand execution
 

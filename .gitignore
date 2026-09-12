@@ -29,9 +29,10 @@ cama_flood/work_*/
 cama_flood/work_global/
 cama_flood/work_global_scratch/
 
-# ... except the validated, LIAISE-derived reference files (Git LFS), which
-# would otherwise be caught by the *.nc rule above.
+# ... except the validated, LIAISE-derived reference/observation files (Git
+# LFS), which would otherwise be caught by the *.nc rule above.
 !cama_flood/data/*.nc
+!landbench/data/*/*.nc
 
 # Runtime products
 run/logs/
