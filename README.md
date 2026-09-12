@@ -133,6 +133,7 @@ This is alternative to 4. in case of an HPC setup
 
    cama_flood/
      derive_cmf_weights.sh
+     inpmat_to_cmfgpu_npz.py
      data/
        inpmat.nc
        ncdata.nc
@@ -148,4 +149,25 @@ directories, and restart files are intentionally excluded from Git. The
 exception is `init_clim/data/soilinit`, `init_clim/data/surfclim`, and
 `cama_flood/data/`, which are tracked via Git LFS as validated reference
 files.
+
+## CaMa-Flood-GPU coupling (in progress)
+
+Alongside the Fortran `ecland`/`LECMF1WAY` coupling above, there's ongoing
+work to couple CaMa-Flood to `ecLandPy` (`/perm/pad/eclandpy`, a
+from-scratch Python land-surface model) via
+[**CaMa-Flood-GPU**](https://github.com/Kshy0/CaMa-Flood-GPU), a GPU
+reimplementation of CaMa-Flood built on PyTorch/Triton/CUDA:
+
+> Kang, S., Yin, J., & Yamazaki, D. (2026). CaMa-Flood-GPU: A GPU-based
+> hydrodynamic model implementation for scalable global simulations.
+> *Geoscientific Model Development*, 19(12), 5623–5640.
+> https://doi.org/10.5194/gmd-19-5623-2026
+
+`cama_flood/inpmat_to_cmfgpu_npz.py` bridges the two projects' different
+runoff-mapping formats: it re-encodes this repo's already-validated
+`inpmat.nc` interpolation weights into the sparse `.npz` format
+CaMa-Flood-GPU's dataset classes consume directly, including the inverse
+(catchment -> grid) mapping needed for a future 2-way coupling. See
+`CLAUDE.md` ("CaMa-Flood coupling" -> "CaMa-Flood-GPU coupling prep") for
+how it works and what's been validated so far.
 

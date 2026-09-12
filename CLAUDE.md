@@ -487,6 +487,59 @@ Total domain evap barely shifts (+0.08%) because open water is a small
 tile fraction here -- the effect is real but localized to lake/floodplain
 cells, not a domain-wide signal.
 
+### CaMa-Flood-GPU coupling prep: `cama_flood/inpmat_to_cmfgpu_npz.py`
+
+Separate from the Fortran `ecland`/`LECMF1WAY` coupling documented above,
+there's an independent effort (2026-09) to couple CaMa-Flood to
+`ecLandPy` (`/perm/pad/eclandpy`, a from-scratch Python port), using
+**CaMa-Flood-GPU** (`/etc/ecmwf/nfs/dh2_perm_a/pad/CaMa-Flood-GPU`, upstream
+`Kshy0/CaMa-Flood-GPU` -- not a repo we own, so its own toolchain/run notes
+live in this session's Claude memory rather than a CLAUDE.md there) instead
+of the Fortran model. That model is a from-scratch PyTorch/Triton/CUDA
+reimplementation with its own runoff-mapping format: a CSR sparse `.npz`
+(schema `hydroforge.spatial_mapping.v2`), not `inpmat.nc`.
+
+`cama_flood/inpmat_to_cmfgpu_npz.py` bridges the two: it re-encodes this
+repo's already-validated `inpmat.nc` weights into that `.npz` format,
+rather than re-deriving the interpolation from scratch against
+CaMa-Flood-GPU's own map package.
+```
+python3 inpmat_to_cmfgpu_npz.py \
+    --inpmat data/inpmat.nc --ncdata data/ncdata.nc \
+    --out runoff_mapping_liaise.npz \
+    --out-inverse runoff_mapping_liaise_inverse.npz
+```
+- **Forward** (ecLand grid -> CaMa-Flood catchment): recovers each target
+  cell's *global* CaMa-Flood grid index (`catchment_id = ix*ny+iy`, matching
+  `cmfgpu.params.merit_map.MERITMap`) by inverting `inpmat.nc`'s own
+  regular-grid lat/lon cell-center coordinates, rather than depending on
+  `derive_cmf_weights.sh`'s ephemeral `work/clip_cama_ix0_iy0.txt` offset.
+  Validated: 1026/1026 LIAISE catchments' re-derived area matched
+  `ncdata.nc`'s own `ctmare` at 0.000% difference.
+- **Inverse** (`--out-inverse`, for a future 2-way path): `inpmat.nc`'s own
+  `inpaI/inpxI/inpyI` are dummy-filled here (same root cause as the
+  `COMPUTE_INV=true` requirement noted above -- this repo's committed
+  `cama_flood/data/` only has 1-way weights). Rather than re-run the full
+  `CMFDIR`/`FIXDIR` pipeline, the script computes the exact same result a
+  real `-cinv` run would: reading `gen_inpmatI_reg` in `cython_ext.pyx`
+  confirms the real inverse is *only* a transpose of the forward
+  `(inpx, inpy, inpa)` link table (duplicate-summed), so transposing the
+  already-built forward CSR matrix reproduces it exactly, with no extra
+  1-arcmin data needed. Verified: `forward - inverse.T` is exactly zero,
+  and total linked area is conserved exactly across both directions.
+  Caveat (inherent to the data, not this script): a source cell's summed
+  `coverage` can exceed its own physical area, because the forward map's
+  `fix_area()` rescales each *target* catchment's area independently to
+  match `ctmare` -- not constrained to keep any shared source cell's total
+  under its true area. The real `-cinv` output would show the same
+  property, since it transposes these same post-correction arrays.
+  Documented in the script's own `metadata_json` (`coverage_caveat`) so it
+  travels with the file.
+- No 2-way-coupling consumer exists yet in `cmfgpu` (checked by grepping
+  its source for "inverse"/"reverse"/"2-way" on 2026-09-12) -- the inverse
+  `.npz`'s schema (`cmfgpu_liaise.spatial_mapping.inverse.v1`) is this
+  script's own proposal, not an established Hydroforge convention.
+
 ## ecLand execution
 
 `run/run_liaise_ecland.sh`
