@@ -39,11 +39,16 @@ What gets simplified (deliberate, for a first regional test)
 - `catchment_basin_id` is collapsed to a single basin (0) and `basin_sizes`/
   `num_basins` follow -- correct and sufficient for a single-GPU run, where
   `catchment_basin_id` only matters for multi-GPU load-balancing.
-- Bifurcation arrays are dropped entirely (`bifurcation_path` dim -> 0):
-  this script's paired driver run doesn't open the `bifurcation` module, so
-  they're unused; filtering them (path endpoints both inside the subset)
-  is real extra work with no payoff for this first pass. Add it back (mirror
-  the gauge-filtering logic below) if/when a run opens that module.
+- Bifurcation arrays ARE filtered (2026-09-12, extending the earlier
+  first-pass version which dropped them entirely): kept where BOTH
+  `bifurcation_catchment_id` and `bifurcation_downstream_id` fall in the
+  domain, mirroring the gauge-filtering logic below. Needed once a driver
+  run actually opens the `bifurcation` module -- confirmed as a real,
+  working feature (`cmfgpu/modules/bifurcation.py`, CUDA/Triton/Metal
+  kernels), not a stub, and the Fortran LIAISE reference runs with
+  `LPTHOUT=.TRUE.` (bifurcation on) via this repo's own `bifprm.txt` --
+  so leaving it off on the GPU side was a config gap between the two
+  comparison runs, not a physical difference worth keeping.
 - `gauge_*` arrays ARE filtered (kept where `gauge_catchment_id` falls in
   the subset) -- cheap, and useful for comparing simulated discharge against
   real GRDC stations later, even though the model itself never reads them.
@@ -135,6 +140,15 @@ _GAUGE_DIM_VARS = [
     "gauge_catchment_id", "gauge_station_id", "gauge_reported_area_km2",
     "gauge_allocated_area_km2", "gauge_alloc_error",
 ]
+_BIFURCATION_1D_VARS = [
+    "bifurcation_catchment_x", "bifurcation_downstream_x",
+    "bifurcation_catchment_y", "bifurcation_downstream_y",
+    "bifurcation_path_id", "bifurcation_catchment_id",
+    "bifurcation_downstream_id", "bifurcation_length",
+]
+_BIFURCATION_2D_VARS = [
+    "bifurcation_manning", "bifurcation_width", "bifurcation_elevation",
+]
 _SCALAR_PASSTHROUGH = ["nx", "ny"]
 
 
@@ -187,11 +201,28 @@ def subset(
         print(f"Gauges within domain: {gauge_keep_idx.size} "
               f"(of {gauge_cid.size} global)")
 
+        bif_catchment_id = np.asarray(
+            src.variables["bifurcation_catchment_id"][:], dtype=np.int64,
+        )
+        bif_downstream_id = np.asarray(
+            src.variables["bifurcation_downstream_id"][:], dtype=np.int64,
+        )
+        bif_keep_idx = np.array(
+            [
+                i for i, (c, d) in enumerate(zip(bif_catchment_id, bif_downstream_id))
+                if int(c) in keep_set and int(d) in keep_set
+            ],
+            dtype=np.int64,
+        )
+        n_bif = bif_keep_idx.size
+        print(f"Bifurcation paths within domain: {n_bif} "
+              f"(of {bif_catchment_id.size} global)")
+
         with Dataset(out_path, "w", format="NETCDF4") as dst:
             dst.createDimension("catchment", n_keep)
             dst.createDimension("basin", 1)
             dst.createDimension("flood_level", src.dimensions["flood_level"].size)
-            dst.createDimension("bifurcation_path", 0)
+            dst.createDimension("bifurcation_path", n_bif)
             dst.createDimension("bifurcation_level", src.dimensions["bifurcation_level"].size)
             dst.createDimension("gauge", gauge_keep_idx.size)
             dst.createDimension("saved_points", n_keep)
@@ -239,25 +270,26 @@ def subset(
                 for attr in srcvar.ncattrs():
                     dvar.setncattr(attr, srcvar.getncattr(attr))
 
-            for name in [
-                "bifurcation_catchment_x", "bifurcation_downstream_x",
-                "bifurcation_catchment_y", "bifurcation_downstream_y",
-                "bifurcation_path_id", "bifurcation_catchment_id",
-                "bifurcation_downstream_id", "bifurcation_manning",
-                "bifurcation_width", "bifurcation_length",
-                "bifurcation_elevation",
-            ]:
-                if name not in src.variables:
-                    continue
+            for name in _BIFURCATION_1D_VARS:
                 srcvar = src.variables[name]
-                dims = tuple(
-                    "bifurcation_path" if d == "bifurcation_path" else d
-                    for d in srcvar.dimensions
+                dvar = dst.createVariable(
+                    name, srcvar.dtype, ("bifurcation_path",),
                 )
-                dst.createVariable(name, srcvar.dtype, dims)
+                dvar[:] = np.asarray(srcvar[:])[bif_keep_idx]
+                for attr in srcvar.ncattrs():
+                    dvar.setncattr(attr, srcvar.getncattr(attr))
+
+            for name in _BIFURCATION_2D_VARS:
+                srcvar = src.variables[name]
+                dvar = dst.createVariable(
+                    name, srcvar.dtype, ("bifurcation_path", "bifurcation_level"),
+                )
+                dvar[:, :] = np.asarray(srcvar[:])[bif_keep_idx, :]
+                for attr in srcvar.ncattrs():
+                    dvar.setncattr(attr, srcvar.getncattr(attr))
 
         print(f"Wrote {out_path}: {n_keep} catchments, 1 basin, "
-              f"{gauge_keep_idx.size} gauges, 0 bifurcation paths")
+              f"{gauge_keep_idx.size} gauges, {n_bif} bifurcation paths")
     finally:
         src.close()
 

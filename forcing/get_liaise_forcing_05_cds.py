@@ -404,8 +404,15 @@ def assemble_year(year: int, nc_paths: list[Path], output_path: Path) -> None:
 
             for short_name, payload in dynamic.items():
                 units, long_name = VARIABLE_ATTRS[short_name]
+                # zlib/shuffle/complevel=4 matches get_liaise_forcing_05.sh's
+                # IPSL-mirror output exactly (see WFDE5_CRU_GPCC_2014.nc) --
+                # without it these time-varying variables (the bulk of each
+                # file) are stored uncompressed, roughly doubling file size
+                # for no benefit (confirmed: 2016.nc was 107MB uncompressed
+                # vs ~56MB for an equivalent compressed year).
                 var = out_ds.createVariable(
-                    short_name, "f4", ("time", "lat", "lon"), fill_value=1.0e20
+                    short_name, "f4", ("time", "lat", "lon"), fill_value=1.0e20,
+                    zlib=True, complevel=4, shuffle=True,
                 )
                 var[:] = payload["data"]
                 var.units = units

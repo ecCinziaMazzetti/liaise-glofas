@@ -101,6 +101,57 @@ record is duplicated and assigned the next hourly timestamp.
 Do not remove this endpoint logic: ecLand needs it to reach the full-year
 integration endpoint cleanly.
 
+#### Extended to 2024 (2026-09-13)
+
+The archive now covers **1988-2024** (previously 1988-2014). The CDS
+dataset behind `get_liaise_forcing_05_cds.sh`
+(`derived-near-surface-meteorological-variables`, WFDE5-CRU-GPCC) itself
+only covers "1979 to 2024" per its own catalog page as of this date --
+2025 is not available yet and won't be until CRU/GPCC's own gauge-based
+products catch up (WFDE5 bias-corrects ERA5 against them, so it inherits
+their lag by design, not a limitation of this pipeline).
+
+Ran as: `START_YEAR=2015 END_YEAR=2024 forcing/get_liaise_forcing_05_cds.sh`,
+then `prepare_liaise_forcing_ecland.py --start-year 1988 --end-year 2024
+--repeat-last-for-final-year --overwrite` over the FULL range (not just the
+new years) -- necessary because 2014 was previously the archive's final
+year and had a duplicated endpoint; re-running the full range gives it a
+real one from 2015, and moves the duplicated-endpoint treatment to 2024
+(now the actual final year, verified in the run log: "endpoint: duplicated
+final timestep because next-year forcing was unavailable" appears only for
+2024, every other year got "endpoint: appended first timestep from
+<next-year>.nc").
+
+Real bug found and fixed while extending: `get_liaise_forcing_05_cds.py`'s
+main output variable was created with no compression at all (missing
+`zlib=True, complevel=4, shuffle=True`, which `get_liaise_forcing_05.sh`'s
+IPSL-mirror path does use) -- roughly doubled file size for no benefit
+(confirmed: an uncompressed year was ~107MB vs ~56MB for an equivalent
+compressed one). Fixed for future runs; not worth re-downloading the
+already-fetched 2015-2024 raw data just to recompress (the fix only
+affects new invocations of this script, and the absolute size difference
+here is trivial against available storage) -- if it matters later,
+`nccopy -d4 -s` on the existing files would fix it without re-downloading.
+
+**Each CDS request downloads a global 0.5deg file (the 7-variable "cru"
+request alone is ~12GB) and clips to the LIAISE region during assembly** --
+so the transient raw download is much larger than the final per-year
+output (~56-107MB), and per-request CDS queue time (the real bottleneck,
+not local I/O or transfer -- observed 1-25 minutes per request, highly
+variable) dominates wall-clock time far more than data volume does. A
+transient `502 Bad Gateway` mid-download is normal CDS flakiness;
+`cdsapi`'s own retry logic (up to 500 attempts) handles it without
+intervention.
+
+`forcing/scratch_mirror.sh` (new, same push/pull-only-what-you-need
+pattern as `run/scratch_mirror.sh` and the sibling `plumber2-ecland`
+repo's `scripts/scratch_mirror.sh` -- see either for the measured
+PERM-vs-SCRATCH throughput numbers): pushes raw forcing + the prep script
+to `$SCRATCH` for `prepare_liaise_forcing_ecland.py`'s pass (genuinely
+I/O-heavy across the full multi-decade range, unlike the CDS download
+itself, which gains nothing from `$SCRATCH` since it's queue-bound), pulls
+back only the finished `forcing/WFDE5_CRU_GPCC_ecland/`.
+
 ## Ancillary fields
 
 `init_clim/` creates:
@@ -769,6 +820,58 @@ worst negative improved, 260-352 -> 107 m3/s; 2003's worsened slightly,
 further here, since isolating the net effect on GRDC skill (the actual
 question) is the next step, not a magnitude judgment on bifurcation alone
 from the domain-mean numbers.
+
+#### Tried v4.20 to close the channel-width gap: negative result (2026-09-13)
+
+After the bifurcation rescoring left channel-width vintage
+(`static_network_nc_v2.1` vs `cmf_v430_pkg`) as the sole remaining
+explanation for Fortran's real-gauge advantage, the obvious next question
+was whether running CaMa-Flood-GPU against `cmf_v420_pkg` -- the vintage
+`static_network_nc_v2.1` is understood to actually correspond to --
+would close it. Obtained `cmf_v420_pkg_20240430.tar.gz` (the official
+site, `global-hydrodynamics.github.io/CaMa-Flood/`, still lists this exact
+filename as "the main package" even though a newer v4.30 also exists in
+the same Dropbox folder -- likely doc prose lagging a newer file being
+added, not v4.20 being withdrawn). Rebuilt the whole chain against it
+(`make_map_params_v420.py` -> `subset_parameters_for_liaise.py` ->
+existing `runoff_mapping_liaise.npz`, reused unchanged since it depends
+only on the glb_15min grid definition, not map-package content -- verified
+by exact `target_ids` set equality) -- all 5 years, same 2-pass spin-up,
+bifurcation on.
+
+**Result: no difference at all.** `river_width` (`rivwth_gwdlr.bin`) is
+**byte-identical** between `cmf_v420_pkg_20240430` and `cmf_v430_pkg_20260312`
+-- confirmed by direct file diff/md5sum, not just spot-checking a few
+catchments (also checked: raw satellite `width.bin` and even `nextxy.bin`,
+the whole river network topology -- also byte-identical). Consequently the
+v4.20-driven discharge output matches the v4.30 one to 3+ decimal places
+at every GRDC gauge and at the original Ebro-mainstem comparison points.
+Makes sense in hindsight: v4.30's own changelog entry is just "levee
+parameter map: sample data and script prepared" -- nothing about revising
+the base river network/width maps, so the underlying MERIT Hydro-derived
+map dataset apparently hasn't changed since at least 2024-04.
+
+**This reframes the whole channel-width finding**: it was never a
+"CaMa-Flood-GPU package vintage" issue -- it's a genuine difference
+between two independent width-generation PIPELINES that happen to be
+paired with different package labels: ECMWF's own `static_network_nc_v2.1`
+FIXDIR, built via `calc_rivpar.py`'s power-law-plus-satellite-fusion with
+ECMWF's own calibration constants (`WC=10, WP=0.5, WO=0, WMIN=5`, per
+`build_global_cmf_fixdir.sh`), versus upstream CaMa-Flood's own bundled
+`rivwth_gwdlr.bin` (built by the Yamazaki lab via a separate method,
+apparently stable across at least v4.20-v4.30). No CaMa-Flood-GPU package
+download will touch this -- closing it for real would mean re-deriving one
+side's width using the OTHER side's actual generation pipeline (e.g.
+rerunning `calc_rivpar.py` against `cmf_v430_pkg`'s satellite width input,
+or vice versa), not swapping which map package is used. Treating this as
+the final word on "try a different CaMa-Flood vintage" -- the width
+discrepancy stays a documented, unresolved cross-pipeline difference
+rather than something either side's tooling can close by itself.
+
+The v4.20-driven outputs are at
+`/perm/pad/CaMa-Flood-GPU-run/out/liaise/liaise_<year>_discharge_daily_v420.nc`
+for completeness/reproducibility, but add no new information over the
+v4.30 ones given the above.
 
 ### Real gauge observations: `cama_flood/extract_liaise_grdc_observations.py`
 
