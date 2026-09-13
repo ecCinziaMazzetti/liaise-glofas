@@ -35,6 +35,8 @@ cama_flood/work_global_scratch/
 !landbench/data/*/*.nc
 
 # Runtime products
+run/bin/
+run/lib64/
 run/logs/
 run/output/
 run/restart/

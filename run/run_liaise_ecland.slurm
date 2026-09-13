@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=liaise_ecland
-#SBATCH --output=/perm/pad/liaise/run/logs/liaise_ecland_%j.out
-#SBATCH --error=/perm/pad/liaise/run/logs/liaise_ecland_%j.err
+#SBATCH --output=/perm/pad/liaise-ecland/run/logs/liaise_ecland_%j.out
+#SBATCH --error=/perm/pad/liaise-ecland/run/logs/liaise_ecland_%j.err
 #SBATCH --qos=nf
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

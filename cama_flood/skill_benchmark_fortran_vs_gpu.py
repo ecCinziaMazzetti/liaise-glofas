@@ -18,9 +18,29 @@ how to regenerate them):
 
 Matching: each gauge's exact Fortran grid cell is already known
 (cama15_iy/cama15_ix in the observations file, direct index -- no
-nearest-neighbor needed). The matching GPU catchment is found by nearest
-lat/lon to the same cama15_lat/cama15_lon lookup cell (verified low
-match_dist_deg in the saved results for every station).
+nearest-neighbor needed). The GPU catchment is matched by an EXACT global
+grid-index computation from the same cama15_lat/cama15_lon lookup cell
+(catchment_id = ix_global*ny + iy_global on the shared glb_15min grid --
+exact because both sides use the identical static_network_nc_v2.1 network
+as of the 2026-09-13 FIXDIR rebuild, see CLAUDE.md).
+
+BUG FOUND AND FIXED 2026-09-13: this used to be a "nearest lat/lon" search
+against the GPU output's own longitude/latitude fields -- which come from
+lonlat.bin's per-catchment OUTLET-PIXEL coordinate (can sit anywhere
+within, or even outside, the nominal 0.25deg grid-cell-center Fortran's
+cama15_lat/lon represents), not the grid-cell center itself. Geographic
+"nearest" is not the same as "same grid cell", let alone "same river-
+network position" -- verified this silently matched the WRONG catchment
+at 5 of 7 gauges, with match_dist_deg looking deceptively small (0.08-
+0.26 deg, ~9-29 km -- easily one grid cell at 0.25deg resolution) every
+time. Worst case: RIO CINCA, FRAGA's true upstream_area is 9678 km2
+(matches the real GRDC-reported ~9637 km2 almost exactly); the old
+nearest-lat/lon match landed on a catchment with upstream_area=488 km2 --
+a 20x-too-small tributary stub ~30 km away, not the gauge's own river.
+This affected every GPU comparison run this session (v4.30, v4.20,
+v21fixdir, v21fixdir2 alike, since the bug was in this shared matching
+logic, not particular to any one parameters.nc) -- re-score anything
+that depended on the old per-gauge GPU numbers, not just the aggregates.
 
 Excludes RIO GUADALOPE, CASPE from aggregate statistics: real discharge
 there is near-zero for long stretches (a regulated river, dam/irrigation
@@ -51,6 +71,11 @@ YEARS = [1988, 1995, 2000, 2003, 2005]
 OBS_PATH = "/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/cama_flood/data/liaise_grdc_observations.nc"
 FORTRAN_TMPL = "/perm/pad/liaise_discharge_compare/run_root_fortran_{y}_final/output/{y}/o_totout.nc"
 GPU_TMPL = "/perm/pad/CaMa-Flood-GPU-run/out/liaise/liaise_{{y}}_discharge_daily_spunup{suffix}.nc"
+# glb_15min global grid convention (cmfgpu.params.merit_map.MERITMap):
+# catchment_id = ix_global*GLOBAL_NY + iy_global.
+GLOBAL_WEST, GLOBAL_NORTH = -180.0, 90.0
+GLOBAL_DLON, GLOBAL_DLAT = 0.25, 0.25
+GLOBAL_NY = 720
 
 
 def nc_time_to_dates(var):
@@ -112,17 +137,27 @@ for y in YEARS:
     f_gpu = nc.Dataset(gpu_tmpl.format(y=y))
     gpu_dates = nc_time_to_dates(f_gpu.variables["time"])
     gpu_disc = np.asarray(f_gpu.variables["discharge"][:])  # (time, catchment)
-    gpu_lat = f_gpu.variables["latitude"][:]
-    gpu_lon = f_gpu.variables["longitude"][:]
+    gpu_catchment_id = np.asarray(f_gpu.variables["catchment_id"][:])
+    gpu_cid_to_idx = {int(c): k for k, c in enumerate(gpu_catchment_id)}
 
     for i in range(n_stations):
         name = station_names[i]
         iy, ix = int(cama15_iy[i]), int(cama15_ix[i])
 
-        # GPU: nearest catchment to this station's Cama15 lookup cell
-        d = np.sqrt((gpu_lat - cama15_lat[i]) ** 2 + (gpu_lon - cama15_lon[i]) ** 2)
-        gidx = int(np.argmin(d))
-        match_dist_deg = float(d[gidx])
+        # GPU: EXACT global grid-index match (see module docstring for why
+        # this replaced a nearest-lat/lon search).
+        ix_g = round((float(cama15_lon[i]) - GLOBAL_WEST - GLOBAL_DLON / 2) / GLOBAL_DLON)
+        iy_g = round((GLOBAL_NORTH - float(cama15_lat[i]) - GLOBAL_DLAT / 2) / GLOBAL_DLAT)
+        exact_cid = ix_g * GLOBAL_NY + iy_g
+        if exact_cid not in gpu_cid_to_idx:
+            raise ValueError(
+                f"{name}: exact catchment_id {exact_cid} (from cama15_lat="
+                f"{cama15_lat[i]}, cama15_lon={cama15_lon[i]}) is not in "
+                f"the GPU domain -- domain clipping or grid convention "
+                f"mismatch, investigate before trusting this comparison"
+            )
+        gidx = gpu_cid_to_idx[exact_cid]
+        match_dist_deg = 0.0  # exact grid-index match, not nearest-neighbor
 
         fortran_series = fortran_data[:, iy, ix]
         gpu_series = gpu_disc[:, gidx]

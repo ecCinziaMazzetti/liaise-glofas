@@ -59,14 +59,32 @@ def export(
     lon = np.array([id_to_lonlat[int(c)][0] for c in catchment_id])
     lat = np.array([id_to_lonlat[int(c)][1] for c in catchment_id])
 
-    n_hours, n_catch = discharge.shape
-    n_days = n_hours // 24
-    if n_hours % 24:
-        print(f"Note: {n_hours} hours is not a multiple of 24; dropping the "
-              f"trailing {n_hours % 24} hour(s) from the daily aggregation.")
-    trimmed = discharge[: n_days * 24]
-    daily = trimmed.reshape(n_days, 24, n_catch).mean(axis=1)
-    day_time = time_hours[: n_days * 24 : 24]
+    n_steps, n_catch = discharge.shape
+    # Auto-detect the source's own step spacing rather than assuming
+    # hourly: a daily-coupling run (--runoff-interval-hours 24, see
+    # run_liaise_year_spinup.py) already emits one step per day (time
+    # units "days since ...", spacing==1), and re-aggregating those in
+    # groups of 24 would silently truncate a year to ~15 days.
+    step_hours = float(time_hours[1] - time_hours[0])
+    if time_units.strip().lower().startswith("days"):
+        step_hours *= 24.0
+    steps_per_day = round(24.0 / step_hours)
+    if steps_per_day <= 1:
+        print(f"Note: source step spacing is {step_hours:g}h (>= 1 day); "
+              f"already daily, no aggregation needed.")
+        daily = discharge
+        day_time = time_hours
+        n_days = n_steps
+    else:
+        n_days = n_steps // steps_per_day
+        if n_steps % steps_per_day:
+            print(f"Note: {n_steps} steps ({step_hours:g}h each) is not a "
+                  f"multiple of {steps_per_day}; dropping the trailing "
+                  f"{n_steps % steps_per_day} step(s) from the daily "
+                  "aggregation.")
+        trimmed = discharge[: n_days * steps_per_day]
+        daily = trimmed.reshape(n_days, steps_per_day, n_catch).mean(axis=1)
+        day_time = time_hours[: n_days * steps_per_day : steps_per_day]
 
     with Dataset(out_path, "w", format="NETCDF4") as out:
         out.createDimension("catchment", n_catch)

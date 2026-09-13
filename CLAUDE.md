@@ -873,6 +873,476 @@ The v4.20-driven outputs are at
 for completeness/reproducibility, but add no new information over the
 v4.30 ones given the above.
 
+#### Built CaMa-Flood-GPU from the Fortran reference's own network: negative result (2026-09-13)
+
+Closed the channel-width question for real this time -- not by trying
+another CaMa-Flood *package* vintage (already shown to be a dead end
+above, since map data is stable across v4.20-v4.30), but by making
+CaMa-Flood-GPU consume **the literal FIXDIR the Fortran `LECMF1WAY`
+reference itself uses** (`static_network_nc_v2.1/glb_15min`,
+`FMAP=/home/rdx/data/50r1/camaflood/static_network_nc_v2.1/glb_15min`),
+eliminating the physiographic-parameter confound entirely rather than
+reasoning about it.
+
+**Pipeline** (all new, `cama_flood/`):
+1. `build_global_cmf_fixdir.sh` (already existed, see the coupling-prep
+   work above) run directly against that CMFDIR -- its defaults already
+   point there, no override needed. Must run via `srun --partition=par
+   --mem=128G` (or similar), NOT the login shell: `gen_inpmat.py` loads
+   the FULL global 1-arcmin catchment map (`1min.catmxy.nc`, ~233M cells)
+   regardless of target network resolution, and got `EC_MEMKILL`'d at
+   ~51GB RSS on the interactive session's cgroup limit even for the
+   *lightweight* glb_15min target. Produced a global FIXDIR bundle
+   (`ncdata.nc`+`rivpar.nc`+`outclm.nc`+`bifprm.txt`+`mpireg.nc`) with
+   252383 catchments / 22022 basins / **16841 bifurcation paths -- exact
+   match to v4.20's own count**, reinforcing that bifurcation topology
+   specifically has been stable across sources, not just versions.
+2. New `fixdir_to_merit_map_bin.py`: converts that FIXDIR into the raw
+   `.bin` MERIT-map directory `cmfgpu.params.merit_map.MERITMap` actually
+   reads (`nextxy.bin`, `rivlen.bin`, ... -- FIXDIR's consolidated NetCDF
+   isn't the same format). Every field traced losslessly to FIXDIR's own
+   data, verified empirically before trusting it, not assumed:
+   - `nextx`/`nexty` confirmed **exactly 1-based** (all 229256 non-mouth
+     links in `ncdata.nc` resolve to a valid basin cell under that
+     hypothesis, zero mismatches) -- matches `nextxy.bin`'s convention
+     with no adjustment needed.
+   - `lonlat.bin` <- `ncdata.nc`'s `lonp`/`latp` ("outlet pixel"
+     lon/lat), matching the per-catchment-representative-point semantics
+     already established for `lonlat.bin` earlier in this investigation
+     (see the coupling-prep section above), not a plain grid-center
+     formula.
+   - `rivwth_gwdlr.bin` <- `rivpar.nc`'s `rivwth` ("Channel width merged
+     with gwdlr") -- the actual field that differed from upstream
+     CaMa-Flood's own `rivwth_gwdlr.bin` in the original comparison.
+   - Manning roughness (`rivpar.nc`'s `rivman`) is NOT converted --
+     confirmed by reading `merit_map.py` that `MERITMap` has no
+     `rivman.bin` read path at all; it always uses its pydantic default
+     (0.03) regardless.
+3. `make_map_params_v21fixdir.py` (CaMa-Flood-GPU checkout's
+   `scripts_user/`, gitignored there): builds the global `parameters.nc`
+   from the converted directory. **Gotcha**: `visualized=True` hung
+   indefinitely (blocked in `poll()` on a localhost socket, near-zero CPU
+   growth for over an hour) -- almost certainly a matplotlib GUI-backend
+   display connection that never resolves in this headless session; the
+   actual `parameters.nc` write had already completed by the time it
+   hung (verified by killing it and confirming the file opened cleanly
+   with all 252383 catchments intact). Set `visualized=False` for any
+   rerun.
+4. `subset_parameters_for_liaise.py` against this new global
+   `parameters.nc` (same `--ncdata data/ncdata.nc` domain definition as
+   always): 1405 catchments, 0 leaks, 66 gauges, 35 bifurcation paths --
+   same structural numbers as the v4.30/v4.20 subsets, confirming the
+   domain definition itself is package-independent as expected.
+5. `run_liaise_year_spinup.py --parameters .../parameters_liaise_v21fixdir.nc
+   --tag _v21fixdir`, all 5 years, 2-pass spin-up, bifurcation on --
+   already supported both flags from the v4.20 rerun, no script changes
+   needed.
+
+**Verified the new width genuinely took effect** (not silently
+overridden): `cmfgpu.params.estimate_river_geometry` only runs when a
+`.bin` file is *missing* -- confirmed by reading `merit_map.py`, no
+unconditional override exists in the model-construction path either.
+Direct comparison of `parameters_liaise_v21fixdir.nc` vs the original
+`parameters_liaise.nc` (v4.30) confirms a large, genuine, domain-wide
+shift: `river_width` median ratio 2.53x (mean 2.71x; only 245/1405
+catchments near-identical, mostly small headwaters pinned at both
+pipelines' shared WMIN=5m floor), `river_height` median 1.00m -> 3.02m
+(1/1405 near-identical). At catchment 519315 specifically (the point
+originally used to document the mismatch): `river_width` 37.94m (v4.30)
+-> 180.83m (v21fixdir) -- even further from the Fortran regional file's
+own 90.53m than v4.30 was, in the *other* direction; this specific global
+rebuild's calibration isn't a perfect reproduction of whatever exact
+build produced the committed regional `cama_flood/data/rivpar.nc`, but
+it's unambiguously built from the same source pipeline/constants, and
+the point stands regardless (see below).
+
+**Result: matching the Fortran reference's own channel geometry barely
+changes the GPU-vs-Fortran skill gap at all.** Rescored against the same
+6 real GRDC gauges (RIO GUADALOPE, CASPE excluded, same reason as
+always), 25 station-years:
+```
+                    v4.30 (mismatched width)   v21fixdir (matched width)
+Fortran beats GPU:  19/25 (76%)                19/25 (76%)  -- IDENTICAL
+median KGE Fortran: -0.155                     -0.155
+median KGE GPU:     -2.231                     -2.231
+median PBIAS Fortran: -35.5%                   -35.5%
+median PBIAS GPU:     +59.6%                   +59.6%
+```
+Per-gauge win/loss pattern is also identical: Fortran wins at 5 of 6
+gauges (all except RIO JILOCA, CALAMOCHA, where GPU wins 0/5 -> unchanged
+either way). The raw per-station-year KGE/PBIAS values differ only in
+the 3rd-4th significant figure between the two GPU runs (e.g. catchment
+519315-adjacent gauge KGE -2.3836 vs -2.4999) -- consistent with a real
+but second-order sensitivity, not a rounding artifact, but nowhere near
+large enough to move a single win/loss verdict at any of the 25
+station-years, let alone the aggregate picture.
+
+**This closes the channel-width line of investigation for good.**
+Domain-wide channel width more than doubling and channel depth tripling
+changed discharge skill by less than the noise floor of the comparison
+itself. Whatever drives the systematic ~76%-of-station-years Fortran
+advantage is NOT primarily channel geometry -- it lies elsewhere in the
+GPU implementation (numerics: adaptive-substep scheme, floodplain
+module defaults/dynamics, spin-up length or behavior, or a genuine
+algorithmic difference from the Fortran kinematic/local-inertia solver),
+not something any map-package or parameter-source substitution will fix.
+Results: `/perm/pad/liaise_discharge_compare/skill_benchmark_results_v21fixdir.json`,
+daily discharge at
+`/perm/pad/CaMa-Flood-GPU-run/out/liaise/liaise_<year>_discharge_daily_v21fixdir.nc`.
+
+#### Correction: "barely changes anything" was too strong, and why (2026-09-13)
+
+The aggregate numbers above (19/25 identical, medians identical to 3
+figures) are real, but reporting them alone overstates the case to
+"channel width has no effect" -- it doesn't; it's just not the axis this
+comparison's aggregate stats are sensitive to. Checked properly after
+push-back:
+
+**The width change at the gauges themselves is real, not just at
+arbitrary domain points.** 5 of the 7 gauge-matched catchments sat at
+`cmf_v430_pkg`'s `WMIN=5.0m` floor (small headwater streams) in the
+original comparison; `static_network_nc_v2.1`'s own pipeline gives them
+genuine, differentiated widths -- up to **6.16x larger** at Rio Cinca,
+Lafortunada (5.00m -> 30.82m):
+
+| Gauge | v4.30 width | v21fixdir width | ratio |
+|---|---|---|---|
+| Cinca, Lafortunada | 5.00m | 30.82m | 6.16x |
+| Vero, Lecina de Barcabo | 5.00m | 17.67m | 3.53x |
+| Guadalope, Caspe | 11.25m | 17.39m | 1.55x |
+| Fortanete, Pitarque | 25.00m | 44.56m | 1.78x |
+| Arba de Luesia, Biota | 5.00m | 8.70m | 1.74x |
+| Cinca, Fraga | 5.00m | 5.75m | 1.15x |
+| Jiloca, Calamocha | 5.00m | 5.00m | 1.00x (unchanged) |
+
+**And discharge does respond.** Per-station-year KGE moves by up to 0.12
+between the two GPU runs (mean delta 0.006, std 0.049, max |delta| 0.116
+across the 25 scored station-years -- none large enough to flip a
+win/loss verdict, but not nothing). The raw daily time series at a
+high-impact catchment (519315, the original documented comparison point)
+shows real shape change despite an almost-unchanged annual mean: day-1
+discharge 608 m3/s (v4.30) vs 1093 m3/s (v21fixdir); annual std 612 vs
+768 m3/s. `r`/`alpha` (KGE's correlation/variability components) shift
+measurably at several gauges (e.g. 1995 Rio Vero: r 0.569->0.600, alpha
+4.215->4.118); `beta` (the mean-flow-ratio component, which drives
+PBIAS) barely moves anywhere.
+
+**Investigated, and ruled out, one candidate explanation: kinematic vs.
+local-inertia regime switching.** Hypothesis was that steep pre-Pyrenees
+terrain at these headwater gauges triggers a kinematic-wave
+simplification (Manning-type, no backwater/pressure term) that's
+inherently less width-sensitive than the full local-inertia equation,
+muting the effect of a large width change. Checked directly in
+`cmfgpu/phys/triton/outflow.py` (and the matching CUDA/Metal kernels):
+the kinematic-wave branch (lines ~234-259) is gated by `HAS_RESERVOIR`
+and only overrides outflow at `is_dam_up` cells (upstream-of-dam, for
+numerical stability near reservoirs) -- it is NOT a general
+terrain-slope switch. This LIAISE domain has **zero reservoirs**
+(`make_map_params_v21fixdir.py`'s own summary: "Number of reservoirs:
+0") and `run_liaise_year_spinup.py` never opens the `reservoir` module
+(`OPENED_MODULES = ("base", "adaptive_time", "bifurcation")`). So
+`HAS_RESERVOIR` is false and this branch never executes for any
+catchment in this domain, regardless of slope -- every cell always runs
+the same local-inertia equation. **Hypothesis falsified**, not just
+unconfirmed.
+
+**The actual explanation: mass conservation, not regime-switching.**
+Worked through the steady-state algebra of the main local-inertia update
+(`outflow.py` lines ~187-203, the only equation active here):
+```
+Q_new = [Q_prev + g*dt*d*S*W] / [1 + g*dt*n^2*(Q_prev/W)/d^(7/3)]
+```
+which converges at steady state to the standard Manning form
+`Q = (W/n)*sqrt(S)*d^(5/3)`. Substituting `d = storage/(W*L)` (i.e.
+holding channel *storage volume* fixed while width changes) gives
+`Q ~ W^(-2/3)` -- exactly the width-sensitivity relationship documented
+earlier in this file from the original v4.30-vs-Fortran width mismatch.
+But storage is NOT fixed here -- it's a state variable the model
+continuously adjusts to balance whatever inflow it's actually receiving,
+and that inflow (ecLand's own runoff forcing) is identical between the
+v4.30 and v21fixdir runs, unrelated to channel geometry. Over any
+sufficiently long averaging window, **mean outflow must converge to mean
+inflow regardless of channel width** -- ordinary mass conservation, not
+a numerics artifact or regime effect. Width changes affect *how* that
+balance is reached (the depth/storage level required, wave celerity,
+peak timing and attenuation) but not the converged mean. This is
+consistent with, and explains, the observed pattern: `beta`
+(mean-flow-ratio, drives PBIAS) is nearly width-invariant; `r`/`alpha`
+(timing/variability, drive the rest of KGE) and the raw time series
+shape are not.
+
+**Net takeaway**: channel width is a real, non-trivial control on this
+model's discharge *dynamics* (confirmed, not dismissed) but is
+structurally protected from affecting long-run mean discharge / PBIAS by
+mass conservation -- so a width-matching exercise was never going to
+close a systematic multi-year PBIAS gap like the one observed against
+Fortran, regardless of how large the width correction turned out to be.
+Whatever drives that gap is still open; the next candidate axes are
+Manning roughness defaults/calibration (not converted by
+`fixdir_to_merit_map_bin.py` at all -- `MERITMap` has no `rivman.bin`
+read path, always uses its pydantic default 0.03 regardless of source
+pipeline) and the adaptive-substep/spin-up numerics, not channel
+geometry.
+
+#### NLOOP>1 spin-up: tested directly, no effect (2026-09-13)
+
+Asked whether running MORE than the existing 2 same-year passes (an
+"NLOOP" scheme) would further equilibrate river storage and close some
+of the gap. Tested directly rather than assumed: `scripts_user/
+test_nloop_convergence.py` (new, gitignored `scripts_user/`) chains 4
+passes in one process on year 2000, v21fixdir parameters, logging
+end-of-year `river_depth` after each. Result: **pass 1 through pass 4 are
+identical to 5-6 significant figures** (mean=0.962023 every single pass;
+std/max differ only in the 6th decimal, float noise). The 2-pass scheme
+already fully converges river storage within one extra pass -- consistent
+with the earlier pass1-vs-pass2 bit-identical-by-year-end finding
+documented above for the original v4.30 runs. No groundwater/baseflow
+delay state exists in CaMa-Flood-GPU at all (confirmed by grep -- and
+consistent with the Fortran namelist's own `LGDWDLY=false`, so this
+isn't a case of Fortran having slow state GPU is missing either), so
+there's no slower reservoir that additional passes could still be
+equilibrating. **NLOOP is not the lever for this gap.**
+
+#### Setup-difference audit against the Fortran namelist (2026-09-13)
+
+Prompted by a direct question: are there other real Fortran-vs-GPU setup
+differences left, beyond channel geometry? Went through
+`namelist/input_cmf`/`namelist/input` line by line against
+CaMa-Flood-GPU's own module defaults/config, rather than guessing:
+
+| Setting | Fortran | GPU | Status |
+|---|---|---|---|
+| River Manning | `PMANRIV=0.03` | `river_manning` default 0.03 | match (confirmed `rivpar.nc`'s own `rivman` field is uniformly 0.03 everywhere, matching `-pMAN 0.03` passed to `calc_rivpar.py` -- zero spatial variation, `std=0.0`) |
+| Floodplain Manning | `PMANFLD=0.10` | `flood_manning` default 0.1 | match |
+| Gravity | `PGRV=9.8` | `gravity` default 9.8 | match |
+| CFL coefficient | `PCADP=0.7` | `adaptive_time_factor` default 0.7 | match |
+| Min kinematic slope | `PMINSLP=1e-5` | `min_kinematic_slope` default 1e-5 | match (moot either way, see below) |
+| Kinematic routing | OFF (`LKINE=.FALSE.`) | dam-upstream-only, 0 reservoirs here | match |
+| Mixed kine/local-inertia | OFF (`LSLPMIX=.FALSE.`) | no such code path exists | match |
+| Groundwater reservoir | OFF (`LGDWDLY=false`) | not implemented at all | match |
+| **River-mouth downstream distance** | **`PDSTMTH=25000.D0` m** | **`river_mouth_distance` default 10000.0 m** | **mismatch -- fixed** |
+| **Runoff coupling frequency** | **daily, `TCOUPFREQ=24`** | **hourly (`RUNOFF_TIME_INTERVAL=timedelta(hours=1)`)** | **mismatch -- fixed** |
+
+One useful side-effect of this audit: `LKINE=.FALSE.` and
+`LSLPMIX=.FALSE.` on the Fortran side directly confirm the local-inertia
+analysis above -- Fortran isn't using kinematic or mixed routing for this
+domain either, so both sides are apples-to-apples pure local-inertia, not
+just GPU defaulting to it.
+
+**Fix 1 -- river-mouth distance**: `MERITMap(..., river_mouth_distance=
+25000.0)` in `make_map_params_v21fixdir.py` (was silently using the
+10000.0 default). Confirmed applied: `downstream_distance` at every
+mouth catchment in the rebuilt `parameters.nc` is now exactly 25000.0.
+
+**Fix 2 -- runoff coupling frequency**: new
+`cama_flood/aggregate_runoff_to_daily.py` produces a daily-mean version
+of each year's hourly `runoff_<year>.nc` (`runoff_<year>_daily.nc`,
+volume-conserving to 1e-9 relative, checked explicitly) and
+`run_liaise_year_spinup.py` gained a `--runoff-interval-hours` flag (24
+to match Fortran, default 1 = unchanged prior behaviour). Two real
+gotchas hit and fixed along the way, worth knowing before touching this
+again:
+- hydroforge's `DatasetTimeline` does **exact datetime lookups**
+  (`start_date + n*time_interval`, decoded via `num2date` against each
+  file's own `time` values into a `dt_to_loc` dict) -- NOT positional
+  indexing. The source hourly files have no `t=0` entry (`time[0]==3600`,
+  i.e. "hour 1", confirmed for all 5 years -- units are `"seconds since
+  <year>-01-01 00:00:00"`), so a naive daily aggregation reusing each
+  day's first hourly timestamp mislabels every day at 01:00 instead of
+  midnight. Fixed: `daily_time = arange(n_days)*86400.0`, exactly
+  matching `start_date=datetime(year,1,1,0,0,0)` +
+  `time_interval=timedelta(hours=24)`.
+- `export_liaise_daily_discharge.py` unconditionally assumed hourly
+  input and reshaped in groups of 24 -- silently truncated a
+  daily-coupled year's 366 already-daily steps down to 15 "days". Fixed
+  to auto-detect the source's own step spacing from its time-coordinate
+  units/values and skip re-aggregation when it's already >= 24h.
+
+Verified `model.step_advance(num_sub_steps=None)`'s adaptive substepping
+genuinely scales with the outer interval rather than assuming hourly
+(checked `hydroforge/execution/substeps.py`'s `_AdaptiveSubstepRequest`,
+then confirmed empirically): substep counts went from ~5/hour (hourly
+runs) to ~110-130/day (daily runs) -- consistent, no hidden hourly
+assumption.
+
+**Result: real, small improvement -- not a fix.** New parameters +
+subset at `parameters_liaise_v21fixdir2.nc`, 5-year rerun (2-pass
+spin-up, bifurcation on, daily forcing), rescored:
+```
+                       v21fixdir (width matched only)   v21fixdir2 (+ mouth-dist + daily forcing)
+Fortran beats GPU:     19/25 (76%)                      19/25 (76%)  -- still identical
+median KGE GPU:        -2.231                           -2.159        (small improvement)
+median PBIAS GPU:      +59.6%                            +55.6%       (small improvement)
+median PBIAS Fortran:  -35.5%                            -35.4%       (unchanged, as expected)
+```
+Single-gauge spot check (year 2000, before the 5-year rescore) showed
+the same pattern at every gauge: KGE improves a few tenths (e.g. Rio
+Arba de Luesia -9.312 -> -8.674, Rio Fortanete -7.693 -> -7.214), `r`
+ticks up slightly, but PBIAS stays in the same 130-215%-overprediction
+range it was already in. The win/loss verdict never flips anywhere.
+
+**Where this leaves the investigation**: three real setup differences
+found and closed this session (channel width/geometry, river-mouth
+distance, coupling frequency), each producing measurable but small
+shifts, none closing the gap. Fortran under-predicts (~-35% PBIAS,
+consistent sign every year) while GPU over-predicts (~+56-150% PBIAS
+depending on year) -- opposite signs, which rules out a single shared
+missing correction (e.g. a unit-conversion factor) as the explanation,
+since that would move both models the same direction. Manning roughness
+is confirmed matched (not a candidate, contrary to earlier speculation).
+Remaining candidate axes, not yet checked: the `inpmat`/regridding
+weights themselves (does the ecLand-to-CaMa-Flood area-weighted regrid
+differ between the two coupling implementations, not just the runoff
+values feeding it?), spin-up START DATE/procedure differences beyond
+river storage (e.g. does Fortran's `INITIAL_RESTART_CMF` spin-up
+actually match this repo's 2-pass same-year scheme, or use a longer/
+different window?), and the DROFUNIT unit-conversion path end-to-end
+(re-verify, don't just re-assume, now that both frequency and mouth
+distance are fixed).
+
+#### THE fix: gauge-matching bug + wrong runoff formula (2026-09-13)
+
+Pushed further on "there's no reason for such a large discrepancy" rather
+than accepting the setup-audit's small, inconclusive gains. Found two
+real, independent, load-bearing bugs -- one in how gauges were matched to
+GPU catchments, one in the runoff forcing itself -- that together explain
+essentially the entire multi-year discrepancy chased since the very first
+GPU-vs-Fortran comparison (`~2x bias` section above, and everywhere since).
+
+**Bug 1 -- gauge matching, wrong catchment at 5 of 7 gauges.**
+`skill_benchmark_fortran_vs_gpu.py` matched each GRDC gauge's GPU
+catchment by nearest lat/lon between Fortran's grid-cell-center
+coordinate (`cama15_lat`/`cama15_lon`) and the GPU output's own
+per-catchment `longitude`/`latitude` -- which comes from `lonlat.bin`'s
+OUTLET-PIXEL coordinate (can sit anywhere within, or outside, the
+nominal 0.25deg grid-cell that Fortran's coordinate represents; see the
+coupling-prep section above for how this differs from a plain
+grid-center formula). Geographic "nearest" is not "same grid cell", and
+is nowhere near "same river-network position": verified this silently
+matched the WRONG catchment at 5 of 7 gauges, with `match_dist_deg`
+looking deceptively small (0.08-0.26 deg, ~9-29 km -- easily one grid
+cell at 0.25deg resolution) every single time, which is exactly why
+nobody caught it despite the parallel session's own 2026-09-12 note
+("plain nearest-neighbor lat/lon matching was unreliable, occasionally
+snapping to an off-channel tributary catchment") -- close, but shrugged
+off as a minor artifact rather than tracked down.
+
+Worst case: RIO CINCA, FRAGA's true `upstream_area` is 9678 km2 (matches
+the real GRDC-reported ~9637 km2 almost exactly, at the EXACT global
+grid-index catchment computed from `cama15_lat`/`cama15_lon`); the old
+nearest-lat/lon match instead landed on a catchment with
+`upstream_area`=488 km2 -- a 20x-too-small tributary stub ~30 km away,
+not the gauge's own river. Fixed: since both sides now share the
+identical `static_network_nc_v2.1` global grid (post the FIXDIR rebuild
+above), the GPU catchment can be found EXACTLY, deterministically, with
+no nearest-neighbor guessing at all -- `catchment_id = ix_global*720 +
+iy_global`, computed straight from `cama15_lat`/`cama15_lon` with the
+same grid formula `MERITMap` itself uses. This fix affected every GPU
+comparison run this session (v4.30, v4.20, v21fixdir, v21fixdir2 alike)
+since the bug lived in the shared matching script, not any one
+`parameters.nc` -- their historical per-gauge numbers should not be
+trusted without re-scoring.
+
+**Bug 2 -- wrong runoff-forcing formula, the real headline finding.**
+`prepare_liaise_runoff_for_cmfgpu.py` fed CaMa-Flood-GPU `Qs - Qsb` as
+total runoff (see that script's now-corrected docstring for the full
+history) -- verified non-negative and "physically plausible" at the
+time, but never checked against Fortran's OWN actual received input,
+which is what would have caught it. Traced the TRUE formula directly
+from ecLand's own Fortran source
+(`/perm/pad/ecland/src/surf/offline/driver/`):
+  - `wrtdcdf.F90` writes `Qs = D1STSRO2` and `Qsb = -D1STRO2 -
+    D1STSRO2` to the output NetCDF -- i.e. `Qsb = -(D1STRO2 + Qs)`, so
+    `D1STRO2 = -(Qs + Qsb)`.
+  - `cnt41s.F90`'s actual `LECMF1WAY` coupling call (`CMF_FORCING_PUT`)
+    hands CaMa-Flood exactly `D1STSRO2` (surface) and `D1STRO2 -
+    D1STSRO2` (subsurface) -- which SUM to `D1STRO2` regardless of the
+    surface/subsurface split. So Fortran's true total input is
+    `D1STRO2 = -(Qs + Qsb)`, not `Qs - Qsb`.
+
+Verified empirically, not just algebraically: computed `-(Qs+Qsb)`,
+mass-conservingly area-weighted through the exact same
+`inpmat.nc`-derived mapping over each gauge's full upstream drainage set
+within the 1405-catchment domain (traced via `downstream_id`, confirmed
+each traced set's summed `catchment_area` matches the target's own
+`upstream_area` exactly first -- no incomplete-upstream-set risk), then
+compared the resulting implied mean discharge against FORTRAN'S OWN
+ACTUAL discharge output at 5 independent (gauge, year) points spanning
+3 different gauges: RIO CINCA FRAGA 2000 (54.18 vs Fortran's actual
+54.29 m3/s), RIO JILOCA CALAMOCHA 1995 (0.580 vs 0.580) and 2003 (1.30
+vs 1.302), FORTANETE PITARQUE 1995 (0.06 vs 0.063) and 2003 (0.30 vs
+0.305) -- every single one matches to within 0.2-3%, several to 3
+significant figures. Airtight, not a coincidence.
+
+`Qs - Qsb` differs from the correct `-(Qs+Qsb)` by exactly `+2*Qs` at
+every grid cell/hour (`(Qs-Qsb) - (-(Qs+Qsb)) = 2*Qs`) -- a spurious
+DOUBLE-COUNTING of surface runoff stacked on top of the correct total.
+This is why the erroneous GPU/Fortran discharge ratio was so stable
+*within* a given gauge across all 5 years (1.85-3.03x depending on
+gauge, checked explicitly and it holds within ~10% at every gauge every
+year) but varied *across* gauges: the excess is proportional to each
+catchment's own local surface-vs-subsurface runoff mix, which is a
+real physical quantity that varies geographically but not much
+year-to-year at a given point. This is also why GPU's own internal mass
+balance checked out perfectly (`total OUTPUT volume` == `total INPUT
+volume` computed independently via the mapping weights, ratio=1.0000,
+at Rio Cinca Fraga 2000) even while the comparison against Fortran
+looked so broken: CaMa-Flood-GPU's own routing/mapping pipeline was
+NEVER the bug -- it was faithfully, correctly routing whatever input it
+was given, and that input was wrong from the very first
+`prepare_liaise_runoff_for_cmfgpu.py` run this repo ever made.
+
+**This also retroactively explains the original "channel width" finding**
+(`### GPU-vs-Fortran discharge comparison (2026-09-12): ~2x bias,
+explained` above): that session found the same ~2.0-2.1x bias and
+attributed it to narrower GPU-side channel width (`Q ~ width^-2/3`
+reasoning) -- a real, measurable effect (confirmed independently this
+session: `river_width` differences of 1.15x-6.16x at these same gauges),
+but this session's width-matching experiment (rebuilding CaMa-Flood-GPU
+from Fortran's own `static_network_nc_v2.1` network, doubling/tripling
+width and depth domain-wide) moved PBIAS by only a few percent, nowhere
+near enough to explain a 2x discharge ratio. Channel width was a real,
+correlated-but-secondary effect riding on top of this much larger
+forcing bug -- coincidentally pointing the same direction (both push GPU
+discharge up relative to Fortran), which is exactly why it looked like a
+sufficient explanation at the time.
+
+**Final result, all fixes combined** (v2.1-FIXDIR network +
+`river_mouth_distance=25000` + daily coupling + corrected `-(Qs+Qsb)`
+forcing + exact gauge matching, tag `_v21fixdir3`, 5-year rerun,
+rescored against the same 6 real GRDC gauges, 25 station-years):
+```
+                       v21fixdir2 (exact matching, WRONG forcing)   v21fixdir3 (exact matching, CORRECTED forcing)
+Fortran beats GPU:     22/25 (88%)                                  4/25 (16%)  -- reversed
+GPU beats Fortran:      3/25 (12%)                                 21/25 (84%)
+median KGE Fortran:    -0.156                                      -0.156
+median KGE GPU:        -1.468                                      -0.140  -- now slightly BETTER than Fortran
+median PBIAS Fortran:  -35.4%                                      -35.4%
+median PBIAS GPU:      +62.9%                                      -35.3%  -- matches Fortran to 0.1 point
+mean |PBIAS(Fortran)-PBIAS(GPU)|: not computed                      0.23 percentage points
+```
+Per-station-year PBIAS now matches Fortran almost exactly EVERYWHERE
+(e.g. 1988 Rio Arba de Luesia: Fortran -80.1%, GPU -80.1%; 2003 Rio
+Guadalope: Fortran 4.9%, GPU 5.0%) -- the remaining KGE differences are
+now dominated by `r`/`alpha` (timing/variability), consistent with this
+session's earlier finding that channel geometry/numerics affect
+dynamics, not the converged mean. GPU actually has a slight net
+KGE edge over Fortran once forcing is no longer confounding the
+comparison -- not a claim this repo previously had grounds to make.
+
+**Practical implication going forward**: `cama_flood/
+prepare_liaise_runoff_for_cmfgpu.py` is now the one true source of
+correct CaMa-Flood-GPU runoff forcing for this domain -- any other/older
+`runoff_<year>.nc` file (or one regenerated by hand without importing
+this script's `-(Qs+Qsb)` formula) is silently ~2-3x wrong. All 5 years'
+`runoff_<year>.nc`/`runoff_<year>_daily.nc` under
+`/perm/pad/CaMa-Flood-GPU-run/inp/liaise/` were regenerated with the fix
+as part of this session -- no stale wrong-formula copies left in that
+directory. Final discharge:
+`/perm/pad/CaMa-Flood-GPU-run/out/liaise/liaise_<year>_discharge_daily_v21fixdir3.nc`,
+scored results:
+`/perm/pad/liaise_discharge_compare/skill_benchmark_results_v21fixdir3.json`.
+
 ### Real gauge observations: `cama_flood/extract_liaise_grdc_observations.py`
 
 A third, independent validation arm alongside the Fortran-vs-GPU comparison
@@ -1075,6 +1545,51 @@ For a year with model timestep `TSTEP`:
 
 This is intentional because the prepared forcing includes the extra endpoint
 at next-year 01-01 00 UTC.
+
+### 37-year control run (CY50R1), full 1988-2024 forcing: validated (2026-09-13)
+
+Reran the plain land-surface control configuration (`namelist/input` as
+committed: `LECMF1WAY=false`, no CaMa-Flood, `CMODID='CY50R1'`) end to end
+over the full newly-extended forcing archive -- one continuous restart
+chain, `soilinit` cold start in 1988, all 37 years through 2024. Purpose:
+confirm the forcing extension (see "Extended to 2024" above) is actually
+usable by ecLand, not just internally self-consistent.
+
+**Result: 37/37 years completed cleanly**, ~1h35m wall-clock (`sbatch`,
+job `36575118`). Domain-mean diagnostics (235 active land points) are
+physically plausible throughout: precipitation 641-975 mm/year (matches
+the Ebro basin's semi-arid/Mediterranean climate), a clean wet-autumn/
+dry-summer seasonal cycle, and a real, visible T2m warming trend across
+the 37 years (annual mean rises from ~11.9 degC in 1988 to ~13.4 degC in
+2024) -- consistent with observed European warming over this period, not
+a modeling artifact. Extraction script: `run/extract_control_diagnostics.py`
+(note: `Rainf`/`Snowf`/`Qs`/`Qsb`/`Evap` in `o_wat.nc` are RATES, kg m-2
+s-1, not pre-accumulated depth per output step despite `LACCUMW`/`LRESET`
+in the namelist -- multiply by the output interval, 3600s here, before
+summing to a yearly depth; caught this the hard way when a first pass
+gave ~0mm for every year). Full annual/monthly-climatology data at
+`/perm/pad/liaise_discharge_compare/control_run_diagnostics.json`
+(outside this repo, not committed -- same convention as the discharge
+comparison data above). Dashboard: `sites.ecmwf.int/pad/liaise/control/`.
+
+**A real infrastructure hazard hit and worked around, worth remembering**:
+the first attempt at this run crashed mid-way (year 1992, Fortran runtime
+error `195`, "allocatable coarray cannot be allocated by an assignment
+statement") at the exact same second (`19:15:23`) that `/perm/pad/ecland`'s
+shared `build/bin/ecland-master-dp` was rebuilt by unrelated, uncommitted
+work-in-progress elsewhere on that checkout (a `LEFIRE` fire-danger module
+addition -- safe-by-default, `namelist/input` never sets it, not itself a
+correctness concern) -- the rebuild overwrote the running binary's pages
+out from under the in-flight process. Fixed by freezing a private,
+self-contained copy of the executable *and* its RPATH-relative shared
+libraries (`$ORIGIN/../lib64`) before rerunning: `run/bin/` (gitignored;
+not derived automatically -- regenerate from `/perm/pad/ecland/build/`
+if it goes stale or a real rebuild is wanted). `run/run_liaise_ecland.slurm`
+also had a stale hardcoded `#SBATCH --output/--error` path left over from
+before this repo was renamed from `liaise` to `liaise-ecland` -- fixed
+alongside this run; `sbatch` fails outright (not just a wrong path) if
+that directory doesn't exist, so this would have blocked any future
+submission of this exact script, not just looked wrong in retrospect.
 
 ## Coding guidelines
 
