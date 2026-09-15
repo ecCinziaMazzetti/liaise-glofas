@@ -87,10 +87,24 @@ Discharge at the six GRDC gauges (25 station-years, Guadalope excluded as a regu
 median KGE −0.135 (eclandpy chain) vs −0.155 (Fortran chain), median r 0.45 vs 0.34, eclandpy
 ahead at 15 of 25 station-years, and drier (PBIAS −42 % vs −36 %, consistent with the runoff gap).
 
-Performance on the 368-column grid: 10.6 min/year on one A100 vs 30.5 min/year on one CPU core
-(2.9×), against 2.56 min/year for Fortran on 4 OpenMP threads — the domain is far too small to
-fill a GPU (per-step cost is launch latency; CaMa-Flood-GPU's own benchmarks run at 17,675×N
-columns), so the port pays off at scale, not here.
+Performance on the 368-column grid, per 30-min step (17,520 steps/year): Fortran 8.8 ms
+(2.56 min/year, 4 OpenMP threads); eclandpy **24 ms on one CPU core** (`gt:cpu_kfirst`,
+≈7 min/year) and **32 ms on one A100** (`gt:gpu`; 37 ms with the three recorders = the
+10.8 min/year the 37-year run measured). The CPU run archived in `output/` took 30.5 min/year
+(104 ms/step) because it ran on ecland-porting *before* C. Kühnlein's main merge (`29e6152`,
+2026-09-14: `run_frozen`, storage cache), which made the CPU path 4× faster; an earlier
+"2.9× GPU speed-up" compared across those two code versions and was wrong. On this domain one
+CPU core beats the A100: 368 columns cannot fill a GPU (per-step cost is launch latency;
+CaMa-Flood-GPU's own benchmarks run at 17,675×N columns), so the port pays off at scale, not
+here. Timing scripts: `profile_liaise_step.py` (250-step blocks) and
+`profile_liaise_recorders.py` (cProfile, recorders, write cost) — run them with the eclandpy
+tree as the working directory (gt4py roots its stencil cache on the cwd) and the environment
+of the submit scripts. The three `nfrpos=1` recorders cost ~3 ms/step on the A100; a variant
+keeping the samples on the device and transferring them in 256-record blocks was tried
+(2026-09-15, bit-identical files) and gained nothing, so the cost is not the device→host
+copies and the host recorders stay. Output files are time-chunked since ecland-porting
+`c3f6846` (fork branch `cy50r1`; same fix as ecLand's NCHUNKTIME): unchanged values, ~5×
+smaller point-site files, 45× faster time-series reads.
 
 ## Two known gaps in the Python coupling (both off in the reference configuration)
 

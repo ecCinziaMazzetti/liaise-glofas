@@ -48,9 +48,15 @@ GRDC = [("median KGE", f"{med('GPU','kge'):.3f}", f"{med('Fortran','kge'):.3f}")
         ("median correlation r", f"{med('GPU','r'):.3f}", f"{med('Fortran','r'):.3f}"),
         ("median PBIAS, %", f"{med('GPU','pbias_pct'):.1f}", f"{med('Fortran','pbias_pct'):.1f}"),
         ("station-years won on KGE", f"{wins} of {len(keys)}", f"{len(keys)-wins} of {len(keys)}")]
-PERF = [("Fortran ecLand CY50R1, 1 node, 4 OpenMP threads", "2.56 min", "~8.8 ms", "1 h 35 m (measured)"),
-        ("eclandpy, gt:cpu_kfirst, 1 CPU core", "30.5 min", "~109 ms", "~19 h"),
-        ("eclandpy, gt:gpu, 1× NVIDIA A100", "10.6 min", "31 ms", "6.5 h (measured, incl. resume)")]
+PERF = [("Fortran ecLand CY50R1, 4 OpenMP threads", "8.8 ms", "2.6 min", "1 h 35 m (measured)"),
+        ("eclandpy gt:cpu_kfirst, 1 core — current code", "24 ms", "≈7 min", "≈4.3 h (projected)"),
+        ("eclandpy gt:cpu_kfirst, 1 core — as run (pre-merge code)", "104 ms", "30.5 min", "13.7 h for 27 yr (measured)"),
+        ("eclandpy gt:gpu, 1× A100 (physics / with recorders)", "32 / 37 ms", "10.8 min", "6.7 h (measured)")]
+PERF_NOTE = ("Per 30-minute step, 17,520 steps per year. The archived CPU run used ecland-porting before C. Kühnlein's "
+             "main merge (29e6152, 14 Sep 2026: run_frozen, storage cache), which made the CPU path 4× faster; the "
+             "\"2.9× GPU speed-up\" reported in the first version of this document compared across those two code "
+             "versions and was wrong. Measured with eclandpy_bridge/profile_liaise_step.py on three EPYC-7742 nodes "
+             "and one A100, flat over 3000 steps.")
 
 # ------------------------------------------------------------------ shared prose
 SUMMARY = (
@@ -64,8 +70,9 @@ SUMMARY = (
     "the Python chain scores marginally better than the Fortran chain (median KGE −0.135 vs −0.155, "
     "r 0.45 vs 0.34, ahead in 15 of 25 station-years). The year-by-year restart mechanism built for eclandpy "
     "reproduces the Fortran restart state after ten chained years to within 0.1 K in soil temperature and "
-    "1–2 % in soil moisture. On this small domain the GPU is 2.9× faster than one CPU core but still ~4× "
-    "slower than Fortran on four cores: 368 columns cannot fill an A100, so the port pays off at scale."
+    "1–2 % in soil moisture. On this small domain one CPU core (24 ms per step, after C. Kühnlein's September "
+    "merge) is faster than the A100 (32 ms), and both are 3–4× slower than Fortran on four threads (8.8 ms): "
+    "368 columns cannot fill a GPU, so the port pays off at scale."
 )
 STRATEGY = [
     ("Reuse, don't re-derive", "eclandpy drives the Fortran-twin-validated GT4Py kernels of ecland_porting "
@@ -96,6 +103,11 @@ LESSONS = [
     "per instantiation. All three now handled; both backends pass single- and multi-driver tests.",
     "Sign conventions cost real effort: Qsb is a negative soil-column loss, so total runoff is −(Qs+Qsb); "
     "Qs−Qsb double-counts surface runoff and passed every plausibility check until compared with Fortran discharge.",
+    "Benchmark on one code version: the CPU and GPU runs straddled the ecland-porting main merge, which made the "
+    "CPU path 4× faster, and the first performance comparison credited that to the GPU. Re-timed on the current code: "
+    "24 ms/step on one core, 32 ms on an A100, 8.8 ms for Fortran on four threads.",
+    "Output files inherit HDF5's one-record-per-chunk default; time-chunking the writers (as ecLand's own offline "
+    "driver now does) makes point-site files 5× smaller and time-series reads 45× faster at no change in values.",
 ]
 GAPS = [
     "Deep-layer (1.9 m) soil moisture diverges regionally after ~2 years — eclandpy drier on the Duero plateau, "
@@ -192,7 +204,8 @@ FIGURE("grdc_kge.png", "Figure 3. Median KGE per gauge. Both chains are poor in 
 H("7. Known gaps and next steps", 1)
 for g in GAPS: doc.add_paragraph(g, style="List Bullet")
 H("8. Performance", 1)
-T(PERF, ["configuration", "per year", "per step", "37 years"])
+T(PERF, ["configuration", "per step", "per year", "37 years"])
+P(PERF_NOTE, size=9.5)
 FIGURE("performance.png", "Figure 4. Wall-clock per simulated year on the 368-column LIAISE grid.", 12)
 H("9. Reproducing this work", 1)
 P("liaise-ecland/eclandpy_bridge/README.md gives the four commands (prepare inputs, land run, routing chain, "
@@ -245,7 +258,7 @@ bullets(s, [
     "Restart chain reproduces the Fortran restart state after 10 years: soil T within 0.1 K, soil moisture within 1–2 %",
     "At the 6 GRDC gauges the Python chain edges the Fortran chain: median KGE −0.135 vs −0.155, r 0.45 vs 0.34, 15/25 station-years",
     "One real physics gap: a regionally coherent deep-soil-moisture divergence that domain means hide",
-    "GPU 2.9× faster than one CPU core, ~4× slower than Fortran on 4 cores — the domain is too small to fill an A100",
+    "Per step: Fortran 8.8 ms (4 threads), eclandpy 24 ms on one CPU core, 32 ms on an A100 — 368 columns cannot fill a GPU; the case for the port is at scale",
 ], size=17)
 s = slide("Porting strategy", "five principles")
 bullets(s, STRATEGY, size=15, bold_lead=True)
@@ -274,9 +287,10 @@ s = slide("River discharge vs GRDC observations", "6 LIAISE gauges, 5 benchmark 
 table(s, GRDC, ["", "eclandpy → CaMa-Flood-GPU", "Fortran chain"], w=8, size=13, rh=0.34)
 picture(s, "grdc_kge.png", x=1.87, y=3.7, w=9.6)
 s = slide("Performance", "per simulated year, 368-column LIAISE grid")
-table(s, PERF, ["configuration", "per year", "per step", "37 years"], size=14)
-picture(s, "performance.png", x=3.67, y=3.6, w=6.0)
-bullets(s, ["Per-step cost at 368 columns is kernel-launch latency; CaMa-Flood-GPU's own benchmarks run at 17,675×N columns — the case for the port is at scale"], y=6.45, h=0.9, size=14)
+table(s, PERF, ["configuration", "per step", "per year", "37 years"], size=13, rh=0.38)
+picture(s, "performance.png", x=3.9, y=3.75, w=5.5)
+bullets(s, ["The archived CPU run predates C. Kühnlein's main merge (4× faster CPU path); the earlier \"2.9× GPU speed-up\" compared across code versions and was wrong",
+            "Per-step cost at 368 columns is kernel-launch latency; CaMa-Flood-GPU's own benchmarks run at 17,675×N columns — the case for the port is at scale"], y=6.35, h=1.1, size=12)
 s = slide("Known gaps and next steps"); bullets(s, GAPS, size=14)
 s = slide("Reproduce it", "four commands, two environments")
 bullets(s, ["liaise-ecland/eclandpy_bridge/README.md — prepare inputs → land run (CPU or A100) → routing chain → dashboard",
