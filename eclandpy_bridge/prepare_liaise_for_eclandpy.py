@@ -153,22 +153,37 @@ def build_met(out_path: Path, year: int, days: int | None) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--year", type=int, required=True, help="Year to prepare (matches a WFDE5_CRU_GPCC_<year>_ecland.nc file).")
-    p.add_argument("--days", type=int, default=None, help="Truncate forcing to the first N days (omit for the full year).")
+    p.add_argument("--year", type=int, help="Single year to prepare (matches a WFDE5_CRU_GPCC_<year>_ecland.nc file).")
+    p.add_argument("--year-start", type=int, help="First year of a range (use with --year-end) -- e.g. for the full 37-year control-run-matching chain, 1988.")
+    p.add_argument("--year-end", type=int, help="Last year of a range (inclusive).")
+    p.add_argument("--days", type=int, default=None, help="Truncate each year's forcing to the first N days (omit for the full year).")
     p.add_argument("--out-root", type=Path, default=Path("/perm/pad/liaise-ecland/eclandpy_bridge/data"),
                     help="Root dir; files are written to <out-root>/{forcing,clim}/LIAISE/.")
     p.add_argument("--site", default="LIAISE")
     args = p.parse_args()
 
-    iyear = fyear = args.year
+    years = (
+        list(range(args.year_start, args.year_end + 1))
+        if args.year_start is not None
+        else [args.year]
+    )
     forcing_dir = args.out_root / "forcing" / "LIAISE"
     clim_dir = args.out_root / "clim" / "LIAISE"
     forcing_dir.mkdir(parents=True, exist_ok=True)
     clim_dir.mkdir(parents=True, exist_ok=True)
 
-    build_surfclim(clim_dir / f"surfclim_{args.site}_{iyear}-{fyear}.nc")
-    build_surfinit(clim_dir / f"surfinit_{args.site}_{iyear}-{fyear}.nc")
-    build_met(forcing_dir / f"met_2dHT_{args.site}_{iyear}-{fyear}.nc", args.year, args.days)
+    for year in years:
+        iyear = fyear = year
+        # surfclim (time-invariant static fields) and surfinit (initial condition, only ever
+        # consumed at the very first year -- every later year's driver.state is overwritten by
+        # the previous year's saved restart instead, see run_eclandpy_liaise_control.py) are
+        # identical across years; build them once under each year's own filename anyway (cheap,
+        # ~150KB each) since UIOptions derives their path from THIS year's own iyear-fyear, and
+        # every year's `adapter.build()` call reads them even though only year[0]'s surfinit
+        # value is ever actually used downstream.
+        build_surfclim(clim_dir / f"surfclim_{args.site}_{iyear}-{fyear}.nc")
+        build_surfinit(clim_dir / f"surfinit_{args.site}_{iyear}-{fyear}.nc")
+        build_met(forcing_dir / f"met_2dHT_{args.site}_{iyear}-{fyear}.nc", year, args.days)
 
 
 if __name__ == "__main__":

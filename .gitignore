@@ -53,3 +53,19 @@ slurm-*.out
 *.bak
 *~
 .DS_Store
+
+# eclandpy bridge: same convention as run/output + run/restart above -- the
+# 37-year land run's own output (35 GB), its pickled restart chain, the derived
+# CaMa-Flood runoff/discharge, and the generated dashboard (published to
+# sites.ecmwf.int/pad/liaise/eclandpy/, rebuilt by build_eclandpy_dashboard.py).
+eclandpy_bridge/data/
+eclandpy_bridge/output/
+eclandpy_bridge/output_gpu/
+eclandpy_bridge/restart/
+eclandpy_bridge/restart_gpu/
+eclandpy_bridge/cmfgpu_runoff/
+eclandpy_bridge/cmfgpu_runoff_gpu/
+eclandpy_bridge/cmfgpu_out/
+eclandpy_bridge/cmfgpu_out_gpu/
+eclandpy_bridge/dashboard_eclandpy/
+eclandpy_bridge/logs/
