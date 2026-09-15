@@ -1,0 +1,46 @@
+# LICENSE HEADER MANAGED BY add-license-header
+# Copyright (c) 2025 Shengyu Kang (Wuhan University)
+# Licensed under the Apache License, Version 2.0
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+
+"""
+Script to generate model parameters from CaMa-Flood map data.
+"""
+
+
+from cmfgpu.params import MERITMap
+
+
+def main():
+    print("=== Generating Map Parameters ===")
+
+    # --- Configuration Start ---
+    map_resolution = "glb_15min"
+    map_dir = f"/perm/pad/cmf_v430_pkg_20260312/map/{map_resolution}"
+    out_dir = f"/perm/pad/CaMa-Flood-GPU-run/inp/{map_resolution}"
+
+    # Optional files
+    bifori_file = f"{map_dir}/bifori.txt"
+    gauge_file = f"{map_dir}/GRDC_alloc.txt"
+
+    # Settings
+    target_gpus = 1
+    visualized = True
+    # --- Configuration End ---
+
+    merit_map = MERITMap(
+        map_dir=map_dir,
+        out_dir=out_dir,
+        bifori_file=bifori_file,  # Set to None if not available
+        gauge_file=gauge_file,  # Set to None if not available
+        visualized=visualized,
+        bif_levels_to_keep=5,
+        target_gpus=target_gpus,
+        out_file="parameters.nc",
+    )
+    merit_map.build_input()
+
+
+if __name__ == "__main__":
+    main()
