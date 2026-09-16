@@ -10,3 +10,4 @@ cama_flood/data/liaise_grdc_observations.nc filter=lfs diff=lfs merge=lfs -text
 landbench/data/ES-VDA/*.nc filter=lfs diff=lfs merge=lfs -text
 init_clim/data/soilinit_depthtrilogy filter=lfs diff=lfs merge=lfs -text
 init_clim/data/surfclim_depthtrilogy filter=lfs diff=lfs merge=lfs -text
+cama_flood/data/liaise_river_observations_grdc_camels.nc filter=lfs diff=lfs merge=lfs -text
