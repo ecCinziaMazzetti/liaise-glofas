@@ -98,8 +98,15 @@ if [[ -z "$SO_FILE" || "$SCRIPTS_DIR/cython_ext.pyx" -nt "$SO_FILE" ]]; then
     echo "Building cython_ext (into ${SCRIPTS_DIR})"
     ( cd "$SCRIPTS_DIR" && rm -f cython_ext.c cython_ext*.so && rm -rf osm_pyutils build \
       && python3 setup_cython.py build_ext --inplace --path=. )
-    if [[ -f "$SCRIPTS_DIR/osm_pyutils"/cython_ext*.so ]]; then
-        mv "$SCRIPTS_DIR"/osm_pyutils/cython_ext*.so "$SCRIPTS_DIR/"
+    # `[[ -f pattern* ]]` does NOT glob-expand inside [[ ]] (only == / != treat
+    # the right side as a pattern) -- it tests the literal string "pattern*",
+    # which never exists, so this check silently no-opped every time. Only went
+    # unnoticed because a pre-existing .so from an earlier build usually
+    # already satisfied the staleness check above and skipped this block
+    # entirely. Use find, which does do real matching, instead.
+    NESTED_SO=$(find "$SCRIPTS_DIR/osm_pyutils" -maxdepth 1 -iname 'cython_ext*.so' -print -quit 2>/dev/null)
+    if [[ -n "$NESTED_SO" ]]; then
+        mv "$NESTED_SO" "$SCRIPTS_DIR/"
         rmdir "$SCRIPTS_DIR/osm_pyutils" 2>/dev/null || true
     fi
 fi
