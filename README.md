@@ -145,9 +145,18 @@ ldd run/<pin>/bin/ecland-master-dp | grep libecland_surf    # must point into ru
 
 `cama_flood/data/liaise_grdc_observations.nc` holds daily discharge 1988–2014 at the 7 GRDC gauges that CaMa-Flood's own network connects to the Ebro (Cinca at Fraga and Lafortunada, Guadalope at Caspe — regulated —, Jiloca, Vero, Arba de Luesia, Fortanete), each with its exact CaMa-Flood grid cell (`cama15_ix/iy`), extracted by `cama_flood/extract_liaise_grdc_observations.py` from ECMWF's internal station archive.
 
+`cama_flood/data/liaise_river_observations_grdc_camels.nc` extends that to 53 gauges by adding CAMELS-Spain (`--providers GRDC camelses`) — the merged Qobs archive turned out to carry CAMELS-Spain station IDs with no populated discharge, so non-GRDC providers fall back to the raw per-station Caravan archive (`--caravan-timeseries-dir`), converting its mm/d convention to m3/s via each station's catchment area. CAMELS-Spain carries its own licence, separate from GRDC's public-domain status — see the script's docstring before redistributing this file.
+
 ```bash
 python3 cama_flood/skill_benchmark_chains.py --years 1988-2014      # coupled chain vs eclandpy->CaMa-Flood-GPU chain vs GRDC
 python3 cama_flood/build_chain_dashboard.py --results <json> --out index.html
+
+# Non-comparative: score the Fortran control chain alone against every gauge (GRDC + CAMELS-Spain)
+python3 cama_flood/skill_benchmark_control.py --obs data/liaise_river_observations_grdc_camels.nc \
+    --fortran-tmpl /perm/pad/liaise_cmf_1988_2024/output/{y}/o_totout.nc \
+    --reuse-fortran-rows <skill_benchmark_chains.json> --out <results.json>
+python3 cama_flood/build_control_dashboard.py --obs data/liaise_river_observations_grdc_camels.nc \
+    --results <results.json> --ncdata data/ncdata.nc --out index.html
 ```
 
 *Expect:* one JSON row per (year, gauge, model) with KGE, r, α, β, NSE, PBIAS, and a self-contained HTML page. `skill_benchmark_fortran_vs_gpu.py` is the original five-year (1988/1995/2000/2003/2005, 2-pass spin-up) benchmark; its findings — including two bugs it took to make the GPU port agree with Fortran to 0.2 % — are written up in `CLAUDE.md`.
@@ -159,7 +168,7 @@ python3 cama_flood/build_chain_dashboard.py --results <json> --out index.html
 - `landbench/`: FLUXNET-Shuttle point observations in the LIAISE region (one materialised site, `ES-VDA`), for future point runs.
 - `docs/`: banner, report and slides on the eclandpy chain.
 
-ECMWF-internal dashboards: `sites.ecmwf.int/pad/liaise/control/` (37-year control), `…/GPU_check/` (Fortran vs GPU vs GRDC), `…/eclandpy/` (eclandpy chain).
+ECMWF-internal dashboards: `sites.ecmwf.int/pad/liaise/control/` (37-year control), `…/GPU_check/` (Fortran vs GPU vs GRDC), `…/eclandpy/` (eclandpy chain), `…/chains/` (Fortran vs eclandpy→GPU chains, every gauged year), `…/gauges/` (Fortran control alone, KGE/NSE/r/PBIAS map over 47 GRDC+CAMELS-Spain gauges).
 
 ## Namelists
 
@@ -200,9 +209,10 @@ Key scripts. Shell scripts resolve the repository from their own location; Pytho
 | `run/check_water_budget.py`, `check_energy_budget.py` | Raw-output budget closure (from plumber2-ecland) |
 | `cama_flood/derive_cmf_weights.sh` | Derive `inpmat.nc` and the clipped river-network files |
 | `cama_flood/build_global_cmf_fixdir.sh` | Build the global CaMa-Flood fix bundle at any resolution |
-| `cama_flood/extract_liaise_grdc_observations.py` | GRDC gauges connected to the Ebro on the CaMa-Flood network |
-| `cama_flood/skill_benchmark_chains.py`, `skill_benchmark_fortran_vs_gpu.py` | Score discharge against the gauges |
-| `cama_flood/build_chain_dashboard.py` | Self-contained skill page from the benchmark JSON |
+| `cama_flood/extract_liaise_grdc_observations.py` | GRDC (+ optionally CAMELS-Spain) gauges connected to the Ebro on the CaMa-Flood network |
+| `cama_flood/skill_benchmark_chains.py`, `skill_benchmark_fortran_vs_gpu.py` | Score discharge, Fortran chain vs eclandpy→GPU chain, against the gauges |
+| `cama_flood/skill_benchmark_control.py` | Score the Fortran control chain alone (no second model) against every gauge |
+| `cama_flood/build_chain_dashboard.py`, `build_control_dashboard.py` | Self-contained skill pages from the benchmark JSONs |
 
 ## License
 
