@@ -1591,6 +1591,45 @@ alongside this run; `sbatch` fails outright (not just a wrong path) if
 that directory doesn't exist, so this would have blocked any future
 submission of this exact script, not just looked wrong in retrospect.
 
+### 37-year ecLand–CaMa-Flood coupled run, 1988-2024: validated (2026-09-16)
+
+The first valid multi-year coupled run (the earlier 1988-2014 one predates the
+`cnt41s.F90`/domain fixes and is invalid, see "Validated so far" above).
+`namelist/input_cmf1way` (= `namelist/input` with `LECMF1WAY=true`,
+`TCOUPFREQ=1`, `CNMEXP="liaise_wfde5_cmf"`), CaMa-Flood side
+`namelist/input_cmf` (bifurcation on, `LDAMOUT=.FALSE.`, 6-hourly output),
+executable = the Sep-13 control pin `run/bin/ecland-master-dp_pinned_20260913`
+(so the land physics is the control's; 1-way coupling means the land state is
+the control run's, year for year), cold start 1988, restart-chained (land and
+CaMa-Flood) to 2024. `sbatch` job `37620761`, `qos=nf`, 4 threads, 32 GB:
+**37/37 years, status 0, 1 h 47 min wall-clock (~2.9 min/year)**. Output
+outside the repo at `/perm/pad/liaise_cmf_1988_2024/{output,restart,work,logs}`
+(72 GB; per year `o_totout.nc` 6-hourly on the 73x49 CaMa-Flood grid, 1405
+active cells, 1e20 fill, plus `o_rivsto/o_fldsto/o_fldfrc/o_gwsto/o_wevap`,
+`log_CaMa.txt`, `restart_cmf_<year>1231.nc`). Sanity per sampled year:
+domain-mean discharge 35-49 m3/s, peaks 6-9 x 10^3 m3/s (Rhone-scale), 0.35-0.44 %
+negative values (the documented delta/bifurcation signature). This is the
+naturalised (no-reservoir) baseline the CaMa-Flood v4.2 reservoir-operation
+scripts need (annual mean/max and 100-year discharge per dam cell) -- see the
+"Ebro Reservoir Operation" feasibility artifact.
+
+**Two-chains discharge benchmark** (`cama_flood/skill_benchmark_chains.py`,
+`build_chain_dashboard.py`): this chain vs the eclandpy -> CaMa-Flood-GPU chain
+(`eclandpy_bridge/cmfgpu_out_gpu_repro/`, same network, eclandpy runoff -21 %
+vs the Fortran control) against the 7 GRDC gauges over every gauged year,
+1988-2014 = 133 station-years excluding regulated Caspe. Fortran `totout` is
+averaged to daily means before matching (the 5-year benchmark files were
+daily). Result: GPU chain ahead on KGE in 80/133 (median KGE -0.179 vs
+-0.233, median r 0.394 vs 0.359), Fortran chain closer on volume (median PBIAS
+-37.9 % vs -52.3 %, the runoff deficit showing through); per gauge the GPU
+chain wins the larger Pyrenean catchments (Cinca-Fraga 21/23, Fortanete 19/22,
+Lafortunada 6/7), Fortran the small dry tributaries (Vero 19/27, Arba 14/27,
+Jiloca 14/27); both under-predict everywhere. JSON:
+`/perm/pad/liaise_discharge_compare/skill_benchmark_chains.json` (320 rows).
+Page: `sites.ecmwf.int/pad/liaise/chains/` and
+`https://claude.ai/artifact/GRAU87yGFPz2P5rotyUq1R` ("Two Chains on the
+Ebro", the "LIAISE Correction" design re-pointed at the 37-year runs).
+
 ### Pinned binaries: the executable's RPATH is `$ORIGIN/../lib64` (2026-09-16)
 
 `ecland-master-dp` finds its own `libecland_surf_dp.so`/`libfiat.so`/... via
