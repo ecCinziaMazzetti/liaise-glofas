@@ -164,8 +164,17 @@ if [[ -z "$SO_FILE" || "$SCRIPTS_DIR/cython_ext.pyx" -nt "$SO_FILE" ]]; then
 fi
 
 # Resolve before cd'ing into WORKDIR, since these are commonly given as
-# paths relative to this script's own directory.
+# paths relative to this script's own directory. FIXDIR in particular is
+# often passed relative (e.g. the build_global_cmf_fixdir.sh usage message's
+# own example, "FIXDIR=./work_global/$CMF_RES") -- missing this resolution
+# was a real bug (found 2026-09-16 deriving glb_06min/glb_03min weights):
+# every FIXDIR/*.nc reference below silently broke once cd "$WORKDIR" made
+# the relative path point somewhere else, failing with a confusing
+# FileNotFoundError deep inside sel_region.py rather than up front here.
 LIAISE_GRID_FILE=$(cd -- "$(dirname -- "$LIAISE_GRID_FILE")" && pwd)/$(basename -- "$LIAISE_GRID_FILE")
+if [[ -d "$FIXDIR" ]]; then
+    FIXDIR=$(cd -- "$FIXDIR" && pwd)
+fi
 
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
