@@ -36,23 +36,35 @@ outputs).
 | 2 | Allocate the dams on the map | **done** | `cama_flood/estimate_dam_q100.py`'s `load_dams()`: 45 dams matched by nearest-cell lookup against `ncdata.nc`'s `basin` field (see above), no Fortran allocator run needed since `GRanD_allocated.csv` ships pre-allocated. 39 unique grid cells (some dams share a 0.25° cell, e.g. Canelles/SantaAna, Talarn/Terradets — expected at this resolution, both get the same naturalised Q100 from their shared cell). |
 | 3 | Estimate parameters (p01 mean/max, p02 Gumbel Q100, p03 volume, p04 merge) | **done, first pass (37%-fallback volume)** | `cama_flood/estimate_dam_q100.py` re-run 2026-09-16 once all 37 years landed (superseding the earlier 22-year interim pass — Q100 moved <7% at every dam between the two, e.g. Mequinenza 5713→5703, Itoiz 630→673). Gumbel-via-L-moments checked line-for-line against `p02_get_100yrDischarge.py`. **Key finding stands**: annual-mean discharge agrees closely between the Fortran and GPU/eclandpy naturalised series at every dam despite the documented −21% runoff bias, but Q100 doesn't — Fortran runs ~1.5–1.8× the GPU estimate everywhere (mean flow is protected by mass conservation, extremes aren't). `cama_flood/build_dam_param_csv.py` then reimplements `p04_complete_damcsv.py`'s exact merge rules (Qf=0.3·Q100 with the <Qn bump rule; FldVol=37%·capacity since GRSAD is still blocked; **one dam per grid cell, keep the largest by capacity** — 6 smaller co-located dams dropped: SantaAna, Urrunaga, Terradets, GonzalezLacasa, Laparan, SanLorenzoMongay) into a runtime-ready `dam_param.csv`, 39 dams, exact 13-column `LDAMYBY=.TRUE.` format `cmf_ctrl_damout_mod.F90` reads. Saved at `/perm/pad/liaise_discharge_compare/dam_param.csv` and staged for a run at `cama_flood/data_dam_firstpass/dam_param.csv` (gitignored — first-pass, not GRSAD-calibrated, deliberately kept out of the validated `cama_flood/data/`). |
 | 4 | Wire `&NDAMOUT` into the CaMa namelist | **done** | New `namelist/input_cmf_dam` (copy of `input_cmf` with `LDAMOUT=.TRUE.`, `CVARSOUT` +`daminf,damsto`, and the `&NDAMOUT` block from the artifact's §3.4) — kept as a separate file rather than editing `input_cmf` in place, so the naturalised baseline used everywhere else in this project is untouched. `run/run_liaise_ecland.{sh,slurm}`'s `CMF_STATIC_FILES` array gained a `${CMF_STATIC_FILES_EXTRA:-}` extension point (empty by default, zero behaviour change for existing runs) so `dam_param.csv` can be staged without hardcoding it into every run. |
-| 5 | First dammed run, 1988–2024 | **ready, not launched** | Everything needed exists; this just needs an `sbatch` submission (see command below) and hasn't been fired — a multi-hour job on shared infrastructure is worth a final check before submitting rather than launching automatically. |
-| 6 | Score against regulated/natural gauge split | not started | `cama_flood/skill_benchmark_control.py` (already generalised to any `--obs` file) can score this once the dammed run exists — pass the naturalised run as the null model. |
+| 5 | First dammed run, 1988–2024 | **blocked: crashes in 1988, real finding, not a config error** | See "Step 5 attempt" below — three submissions, two were this session's own mistakes (wrong `sbatch` invocation, then a missing env var), the third hit a genuine CaMa-Flood dam-module interaction and crashed with SIGFPE ~140 days into 1988. |
+| 6 | Score against regulated/natural gauge split | not started | Blocked on step 5. |
 
-### Step 5 launch command (ready, awaiting go-ahead)
+### Step 5 attempt, 2026-09-16: submission mistakes, then a real crash
+
+**Submission mistakes (own errors, logged so they aren't repeated)**:
+1. First attempt used shell-prefixed env vars (`RUN_ROOT=... sbatch run_liaise_ecland.slurm`) — **this cluster's `sbatch` does not propagate ad-hoc shell env vars this way**; the README already documented the right form (`sbatch --export=ALL,VAR=val,... script`) and this should have been checked first. The job silently ran with every default — plain `namelist/input` (no coupling at all), writing into the default `run/output/`/`run/restart/` (not a scratch path) — and "succeeded" in ~1h55m, overwriting all 37 years of the plain CY50R1 control run's restart chain. Not catastrophic (that control run was already invalidated by the land-restart-chain bug above and needed rerunning anyway) but unintentional and unverified — **the control-run diagnostics documented elsewhere in CLAUDE.md are now stale against what's actually on disk in `run/output/`; re-verify before citing them.**
+2. Second attempt fixed the `--export=ALL,...` syntax but dropped `CMF_STATIC_FILES_EXTRA=dam_param.csv` from the list — failed in 12 seconds with a clear `forrtl: file not found ... dam_param.csv`, negligible cost.
+
+**The real finding, third attempt**: with both of the above fixed, the run got into 1988 and crashed after ~140 simulated days (2026-09-16, job 37742075) with `forrtl: error (75): floating point exception` inside `cmf_ctrl_damout_mod_mp_cmf_damout_calc_`, specifically `(DamVol/ConVol)**0.5` (line 384) going through a negative base. Diagnosed exactly via `damtxt-1988.txt` (`LDAMTXT=.TRUE.` paid off): 4 grid cells had gone storage-negative by day 141 (19880520) — **all 4 belong to dams with a construction year after 1988** (Itoiz/2003, Rialb/1999, SanSalvador/2013, Pajares/1994, i.e. `DamStat<=0` this year).
+
+Checked the source directly rather than guessing: `CMF_DAMOUT_CALC` does correctly `CYCLE` past `DamStat<=0` dams — the reservoir release rule genuinely never runs for them, so this is **not** a Qf/Qn calibration problem on these 4. But `CMF_DAMOUT_INIT` marks `I1DAM(ISEQ)=1` and `I2MASK(ISEQ,1)=2` (excluded from the adaptive timestep) **unconditionally for every allocated dam cell**, and the `LPTHOUT` bifurcation-stop loop also checks `I1DAM(...)>0` unconditionally — both regardless of `DamStat`/`LDAMYBY`. So a not-yet-built dam cell still loses its adaptive substep and its bifurcation path the moment it's *allocated*, years before its release rule activates. That's a real, documented-nowhere interaction: at these 4 specific cells, removing those stabilising mechanisms was enough to blow up plain river-routing mass balance, independent of any parameter choice in `dam_param.csv`.
+
+**Not yet tried, candidate next steps** (need a decision, not more blind resubmission):
+- Test with `LDAMYBY=.FALSE.` (all 39 dams active from 1988) as a diagnostic — if the crash disappears, it isolates the problem to the not-yet-built-but-allocated state specifically, which would be worth reporting upstream (this is CaMa-Flood's own code, not this repo's).
+- Check whether these 4 specific cells sit at confluences/near-bifurcation points the same way the Rhone delta does (the domain's known 0.13–0.44% negative-discharge signature) — if so, losing bifurcation there specifically is the mechanism, and a targeted fix (e.g. not disabling bifurcation for `DamStat<=0` cells) would be the right upstream ask.
+- A cruder workaround: drop these 4 dams from `dam_param.csv` for a first working run (they're all small/mid-size relative to Mequinenza/Canelles anyway), come back to them once the interaction is understood.
+No job has been resubmitted pending this decision.
+
+### Step 5 launch command (superseded — do not reuse until the crash above is resolved)
 ```bash
-RUN_ROOT=/perm/pad/liaise_cmf_1988_2024_dam \
-NAMELIST=/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/namelist/input_cmf1way \
-CMF_NAMELIST=/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/namelist/input_cmf_dam \
-CMF_STATIC_DIR=/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/cama_flood/data_dam_firstpass \
-ECLAND_EXE=/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/run/bin/ecland-master-dp_pinned_20260913 \
-sbatch run/run_liaise_ecland.slurm
+sbatch --job-name=liaise_cmf_dam --time=08:00:00 \
+  --export=ALL,RUN_ROOT=/perm/pad/liaise_cmf_1988_2024_dam,NAMELIST=/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/namelist/input_cmf1way,CMF_NAMELIST=/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/namelist/input_cmf_dam,CMF_STATIC_DIR=/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/cama_flood/data_dam_firstpass,CMF_STATIC_FILES_EXTRA=dam_param.csv,ECLAND_EXE=/etc/ecmwf/nfs/dh2_perm_a/pad/liaise-ecland/run/bin/ecland-master-dp_pinned_20260913 \
+  run/run_liaise_ecland.slurm
 ```
-Mirrors the naturalised run's own configuration (same pinned binary, same
-`input_cmf1way`, 1988 cold start, 37 years restart-chained) with only the
-CaMa namelist and static-file source swapped in for the dam module. Expect
-~20% runtime overhead over the naturalised run's ~2h (artifact §5), so
-budget ~2.5h.
+This is the *correct submission form* (note: `--export=ALL,...` as flags, not
+shell-prefixed vars) — keep this form for any future submission on this
+cluster — but do not re-run until one of the candidate fixes above is chosen,
+since it will crash the same way otherwise.
 
 ### Open blockers worth flagging early
 - **GRSAD download** (surface-area series for normal volume, p03): TDL Dataverse API returns 403 from the HPC; needs a browser/desktop fetch. The 37%-fallback in use now is itself one of the artifact's named calibration targets, so not blocking step 5 — but the first dammed run's `FldVol`/`ConVol` split should be treated as provisional until GRSAD lands.
