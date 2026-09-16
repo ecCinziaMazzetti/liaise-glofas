@@ -81,7 +81,7 @@ CMF_NAMELIST_RUN_NAME=${CMF_NAMELIST_RUN_NAME:-input_cmf.nam}
 CMF_RESTART_IN_NAME=${CMF_RESTART_IN_NAME:-restartin_cmf.nc}
 # Files referenced by namelist/input_cmf's NMAP/NDIMTIME/NFORCE blocks;
 # already named to match what CaMa-Flood expects at runtime.
-CMF_STATIC_FILES=(inpmat.nc rivpar.nc rivclim.nc mpireg.nc bifprm.txt diminfo.txt)
+CMF_STATIC_FILES=(inpmat.nc rivpar.nc rivclim.nc mpireg.nc bifprm.txt diminfo.txt ${CMF_STATIC_FILES_EXTRA:-})  # extra files (e.g. dam_param.csv) via env var, staged from CMF_STATIC_DIR like the rest
 
 # Optional OpenMP settings
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}

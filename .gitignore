@@ -34,6 +34,11 @@ cama_flood/work_global_scratch/
 !cama_flood/data/*.nc
 !landbench/data/*/*.nc
 
+# First-pass reservoir run staging (symlinks to cama_flood/data/ + a
+# not-yet-GRSAD-calibrated dam_param.csv, see PLAN.md) -- CMF_STATIC_DIR for
+# the dammed run, kept separate from the validated cama_flood/data/ on purpose.
+cama_flood/data_dam_firstpass/
+
 # Runtime products (bin_*/lib64_* variants are pinned executables for a
 # specific test/bisect, e.g. run/bin_depthtrilogy/ -- same pattern as
 # cama_flood/work_*/ above)
