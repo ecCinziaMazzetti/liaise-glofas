@@ -29,6 +29,20 @@ Usage
 -----
     python3 build_dam_param_csv.py --in /perm/pad/liaise_discharge_compare/ebro_dam_q100.csv \\
         --q-source fortran --fldvol-fraction 0.37 --out dam_param.csv
+
+    # Excluding a dam whose storage-response band is too narrow for the model's
+    # adaptive-timestep mechanism to handle (see PLAN.md, "Flix" investigation,
+    # 2026-09-16): CALC_ADPSTP excludes every allocated dam cell from the CFL
+    # timestep calculation, so a dam whose capacity turns over in hours rather
+    # than days/weeks can blow through its whole operating range in a single
+    # coupling step and crash cmf_ctrl_damout_mod with a floating-point
+    # exception. Flix (Ebro mainstem, ConVol=7.18 MCM, Qf=1545 m3/s) is the
+    # only one of 39 dams that fails this check, by a wide margin (13.2x
+    # overshoot vs the next-worst dam's 2.7x) -- excluding it reverts its
+    # cell to normal undammed routing, leaving Ribarroja/Mequinenza upstream
+    # on the same cascade unaffected:
+    python3 build_dam_param_csv.py --in /perm/pad/liaise_discharge_compare/ebro_dam_q100.csv \\
+        --exclude Flix --out dam_param.csv
 """
 
 import argparse
@@ -44,17 +58,23 @@ ap.add_argument("--min-uparea-km2", type=float, default=0.0,
                  help="drop dams below this CaMa-Flood drainage area; 0 = keep all "
                       "(the 45-dam Ebro set is already the artifact's validated list, "
                       "not blindly reusing whichever MINUPAREA CaMa's own test scripts use elsewhere)")
+ap.add_argument("--exclude", nargs="+", default=[],
+                 help="dam name(s) to drop entirely (case-sensitive, matching the 'name' column in --in). "
+                      "The excluded cell reverts to normal undammed routing.")
 ap.add_argument("--out", required=True)
 args = ap.parse_args()
 
 with open(args.in_csv, newline="") as fh:
     rows = list(csv.DictReader(fh))
 
+exclude = set(args.exclude)
 qn_key, q100_key = f"{args.q_source}_q_mean", f"{args.q_source}_q100"
 
 dams = []
 skipped_no_q = []
 for r in rows:
+    if r["name"] in exclude:
+        continue
     if not r.get(qn_key) or not r.get(q100_key):
         skipped_no_q.append(r["name"])
         continue
