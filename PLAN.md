@@ -7,7 +7,58 @@ pick up mid-task without re-deriving where things stand. When a plan finishes
 or is abandoned, fold a one-line summary into `CLAUDE.md` and delete its
 section here.
 
-## Active: Reservoir operation on the Ebro (CaMa-Flood v4.20 dam module)
+## Active: CaMa-Flood resolution comparison (glb_15min vs glb_06min vs glb_03min, naturalised control)
+
+Started 2026-09-16 evening, superseding the reservoir work below for tonight
+(explicit user instruction: "leave aside the investigations of the problem
+identified with LDAMYBY-true" — that section is paused, not abandoned, see
+below). Goal: run the same 37-year (1988-2024) naturalised (no dams,
+`namelist/input_cmf`, `LDAMOUT=.FALSE.`) ecLand-CaMa-Flood coupled control at
+three CaMa-Flood resolutions and compare discharge skill against the real
+GRDC/CAMELS-Spain gauges, to see whether/how routing resolution changes skill
+— and, as a side benefit, whether it changes anything about the dam-module
+numerical-stability problem being set aside tonight (raised by the user as a
+reason finer resolution might be worth trying regardless).
+
+**Weights**: rederived from scratch (glb_06min: 179x118 grid, 8573 active
+cells; glb_03min: 358x234, 34137 cells — both match the counts already
+validated and documented earlier in CLAUDE.md exactly). Found and fixed two
+real bugs in `derive_cmf_weights.sh`/`build_global_cmf_fixdir.sh` along the
+way (`[[ -f pattern* ]]` never glob-expanding, so the cython_ext .so
+relocation silently never worked; `FIXDIR` not resolved to absolute before
+`cd`-ing into `WORKDIR`) — both committed. Also needed `module load nco`
+(missing from the plain `sbatch --wrap` environment) and had to run the two
+resolutions' cython builds sequentially, not in parallel, since they share
+the same `osm_pyutils/` build directory and race if run concurrently.
+**Committed the validated regional weights to Git LFS** — `cama_flood/data_06min/`
+and `cama_flood/data_03min/` (same 6-file set as `cama_flood/data/` for
+glb_15min: `inpmat.nc`, `rivpar.nc`, `rivclim.nc`, `mpireg.nc`, `bifprm.txt`,
+`diminfo.txt`) — per the user's own suggestion, so this doesn't need
+re-deriving from scratch again.
+
+**Runs launched** (both naturalised, `LDAMOUT=.FALSE.`, same pinned binary
+and `namelist/input_cmf1way` as the validated glb_15min control, 1988 cold
+start, 37 years restart-chained — only `CMF_NAMELIST`/`CMF_STATIC_DIR` differ
+from the glb_15min run, and both write to their own `RUN_ROOT`, **not**
+touching `/perm/pad/liaise_cmf_1988_2024` which stays the glb_15min
+reference):
+- glb_06min: job `37776649`, `RUN_ROOT=/perm/pad/liaise_cmf_1988_2024_06min`,
+  `--time=08:00:00` (budget: ~7min/year x 37 ~= 4.3h, per the single-year
+  timing already validated for this resolution).
+- glb_03min: job `37776709`, `RUN_ROOT=/perm/pad/liaise_cmf_1988_2024_03min`,
+  `--time=20:00:00` (budget: ~25min/year x 37 ~= 15.7h, same basis).
+
+Both confirmed started correctly (right `RUN_ROOT`, right namelist, 1988
+cold start) before being left to run unattended. **Not yet done**: waiting
+for completion; then extract discharge at the (resolution-specific!) GRDC/
+CAMELS-Spain gauge grid cells — `cama15_iy/ix` from the observation file are
+glb_15min-specific and must be re-derived per resolution (nearest-cell match
+against each resolution's own `ncdata.nc`, same method as
+`estimate_dam_q100.py`'s `load_dams()`) — score with
+`skill_benchmark_control.py`-style KGE/NSE/r/PBIAS, and build a 3-resolution
+comparison dashboard, deployed to `sites.ecmwf.int/pad/liaise/`.
+
+## Paused tonight, not abandoned: Reservoir operation on the Ebro (CaMa-Flood v4.20 dam module)
 
 Full feasibility writeup: [Ebro Reservoir Operation](https://claude.ai/artifact/V5ZZxE3K4jFS6tsds5JiP3)
 (artifact, 2026-09-16) — read it before touching this section, this is just
