@@ -60,6 +60,11 @@ ncVARS['ini']['HLICE'] = {
     'dims': ('x'), 'long_name': 'lake ice thickness', 'units': 'm'}
 ncVARS['ini']['HLML'] = {
     'dims': ('x'), 'long_name': 'lake mixed layer thickness"', 'units': 'K'}
+ncVARS['ini']['WTD'] = {
+    'dims': ('x'), 'long_name': 'Water table depth', 'units': 'm',
+    'comment': 'Optional (LEGWRECHARGE); falls back to a flat 100m default if absent. '
+               'See init_clim/add_bedrock_wtd_fields.py -- Fan et al. (2017, PNAS) '
+               'equilibrium water-table depth, not part of the MARS/ERA5 init pipeline above.'}
 #*ncVARS['ini']['seaice'] = {
 #*    'dims': ('x'), 'long_name': 'sea ice mask', 'units': '-'}
 
@@ -95,6 +100,11 @@ ncVARS['clm']['sdor'] = {
     'dims': ('x'), 'long_name': 'Standard deviation of orography', 'units': '-'}
 ncVARS['clm']['sdfor'] = {
     'dims': ('x'), 'long_name': 'Standard deviation of filtered orography', 'units': '-'}
+ncVARS['clm']['RDBEDROCK'] = {
+    'dims': ('x'), 'long_name': 'Depth to bedrock', 'units': 'm',
+    'comment': 'Optional (LEBEDROCKLIM); falls back to a flat 100m default if absent. '
+               'See init_clim/add_bedrock_wtd_fields.py -- not part of the plain MARS/GRIB '
+               'clim.sh pipeline above, since depth-to-bedrock is not a climate.v021 field.'}
 ncVARS['clm']['sst'] = {'dims': (
     'x'), 'long_name': 'sea surface temperature', 'units': 'K', 'dflt': 280.}
 ncVARS['clm']['glacierMask'] = {

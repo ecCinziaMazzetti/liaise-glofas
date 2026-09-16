@@ -112,6 +112,16 @@ LEROLAKE=${LEROLAKE:-true}
 LEIRRIGATION=${LEIRRIGATION:-false}
 LBVOC_EMIS=${LBVOC_EMIS:-false}
 
+# "Depth trilogy" prototype switches (develop branch NAMPARSOIL) -- the
+# per-gridpoint RDBEDROCK/WTD fields (init_clim/add_bedrock_wtd_fields.py)
+# only take effect when these are on. Default off, matching plain ecLand
+# behaviour and leaving the existing control run's namelist/input
+# untouched unless explicitly exported.
+LEUNIFORMROOT=${LEUNIFORMROOT:-.FALSE.}
+LEBEDROCKLIM=${LEBEDROCKLIM:-.FALSE.}
+LEGWRECHARGE=${LEGWRECHARGE:-.FALSE.}
+RWTDRECHARGE=${RWTDRECHARGE:-1.0}
+
 CFORCV=${CFORCV:-Wind.nc}
 CFORCU=${CFORCU:-Wind.nc}
 CFORCT=${CFORCT:-Tair.nc}
@@ -269,6 +279,10 @@ cat > "$OUTDIR/input" <<NAMELIST
   &NAMPARSOIL
   RSIGORMIN=${RSIGORMIN}
   RSIGORMAX=${RSIGORMAX}
+  LEUNIFORMROOT=${LEUNIFORMROOT}
+  LEBEDROCKLIM=${LEBEDROCKLIM}
+  LEGWRECHARGE=${LEGWRECHARGE}
+  RWTDRECHARGE=${RWTDRECHARGE}
   /
   &NAMPARVEG
   /

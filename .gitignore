@@ -34,11 +34,16 @@ cama_flood/work_global_scratch/
 !cama_flood/data/*.nc
 !landbench/data/*/*.nc
 
-# Runtime products
+# Runtime products (bin_*/lib64_* variants are pinned executables for a
+# specific test/bisect, e.g. run/bin_depthtrilogy/ -- same pattern as
+# cama_flood/work_*/ above)
 run/bin/
+run/bin_*/
 run/lib64/
+run/lib64_*/
 run/logs/
 run/output/
+run/output_*/
 run/restart/
 run/work/
 

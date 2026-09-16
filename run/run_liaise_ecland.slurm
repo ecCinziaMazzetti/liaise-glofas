@@ -33,7 +33,7 @@ set -euo pipefail
 #   sbatch run_liaise_ecland.slurm
 #
 # Override paths/settings through environment variables, e.g.:
-#   ROOT=$HOME/Work/liaise \
+#   ROOT=$HOME/Work/liaise-ecland \
 #   ECLAND_EXE=$HOME/Work/ecland/build/bin/ecland-master \
 #   sbatch run_liaise_ecland.slurm
 # ----------------------------------------------------------------------
@@ -42,7 +42,7 @@ set -euo pipefail
 # Paths
 # -------------------------
 WORK=${WORK:-${PERM:-/perm/$USER}}
-ROOT=${ROOT:-$WORK/liaise}
+ROOT=${ROOT:-$WORK/liaise-ecland}
 FORCING_DIR=${FORCING_DIR:-${ROOT}/forcing/WFDE5_CRU_GPCC_ecland}
 STATIC_DIR=${STATIC_DIR:-${ROOT}/init_clim/work}
 NAMELIST=${NAMELIST:-${ROOT}/namelist/input}

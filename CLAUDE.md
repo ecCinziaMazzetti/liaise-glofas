@@ -1591,6 +1591,48 @@ alongside this run; `sbatch` fails outright (not just a wrong path) if
 that directory doesn't exist, so this would have blocked any future
 submission of this exact script, not just looked wrong in retrospect.
 
+### Pinned binaries: the executable's RPATH is `$ORIGIN/../lib64` (2026-09-16)
+
+`ecland-master-dp` finds its own `libecland_surf_dp.so`/`libfiat.so`/... via
+the RPATH `$ORIGIN/../lib64`. That is why `run/bin/` (executable) +
+`run/lib64/` (libraries) works for the Sep-13 control pin above -- and why
+the layout `run/bin_<tag>/ecland-master-dp` + `run/bin_<tag>/lib64/` does
+**not**: from `run/bin_<tag>/`, `../lib64` is `run/lib64/`, so every such
+copy silently runs against the *Sep-13 control build's* libraries. Any
+additional pin must therefore be `run/<pin>/bin/ecland-master-dp` +
+`run/<pin>/lib64/` (that is how `run/bin_depthtrilogy_8fc1d41_intel20{21,23}/`
+are laid out), and `ldd <exe> | grep libecland_surf` must be checked after
+pinning. `.gitignore` covers `run/bin_*/`.
+
+This was found the hard way: the "depth-trilogy" prototype (ecland's
+per-gridpoint `RDBEDROCK` commit `7434326`, which adds a `PBEDROCK`
+argument to `SURFTSTP`/`SURFTSTP_CTL`/`SRFWEXC_VG`/`SRFGWRECHARGE`) appeared
+to crash on the LIAISE domain (SIGFPE in `SRFSN_DRIVER` on the first step,
+then `malloc(): smallbin double linked list corrupted`), and a whole
+bisect -- the `run/bin_bisect*`, `bin_clean_*`, `bin_diag_psdor`,
+`bin_ssdp3d`, `bin_final_safe` copies left by the previous, mem-killed
+session -- concluded the new argument plumbing was at fault and staged a
+revert in `ecland-bedrock-per-point`. All of it was this layout: a
+post-`7434326` executable calling the Sep-13 `libecland_surf_dp.so` (built
+from `55f3d24`, no `PBEDROCK`) with a mismatched argument list, which shifts
+`PSDOR` and the snow arrays into garbage. The copies that "worked"
+(`bin_final_safe`, `bin_clean_develop`) merely had a SURFTSTP signature
+matching the old library -- they were silently running the Sep-13 physics.
+Verified both ways: the byte-identical executable runs the full 1988 year
+cleanly in place or with a `bin/` subdirectory (even under
+`MALLOC_PERTURB_=165` heap poisoning), and crashes as a flat copy. The
+depth-trilogy code, Intel 2021.4 vs 2023.2, the fresh bundle's newer
+field_api/fiat and the netCDF write-behind buffering (`NCHUNKTIME`/`NIOBUF`)
+were all ruled out along the way. The staged revert in
+`ecland-bedrock-per-point` is not a fix and should be dropped; the leftover
+`run/bin_*` bisect copies are invalid and can be deleted.
+
+Two genuine, unrelated things noticed while chasing this: `srfsn_driver_mod.F90`'s
+`LEROGLACIER` block (currently hard-set `.FALSE.`) uses `KLACT` without
+initialising it on snow-free points, and `run/check_water_budget.py` returns
+absurd totals on this domain's output (it does not mask sea/missing points
+despite its docstring) -- neither affects the runs documented here.
+
 ## Coding guidelines
 
 - Preserve scientific logic unless explicitly asked to change it.
