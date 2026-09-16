@@ -304,10 +304,17 @@ for forcing_file in "${forcing_files[@]}"; do
         ln -sf "$SOILINIT_SOURCE" "$SOILINIT_RUN_NAME"
         echo "Initial state: $SOILINIT_SOURCE"
     else
-        cp -f "$previous_restart" "$RESTART_IN_NAME"
-        ln -sf "$SOILINIT_SOURCE" "$SOILINIT_RUN_NAME"
-        sed_inplace -e 's/^([[:space:]]*LNF[[:space:]]*=).*/\1 .FALSE./' "$NAMELIST_RUN_NAME"
-        echo "Restart input: $previous_restart -> $RESTART_IN_NAME"
+        # Continue from the previous year's restart by using it AS the
+        # initial-state file, exactly as ecland_run_model.sh's RLOOP does
+        # (restartout.nc is a superset of soilinit: same fields, SoilMoist in
+        # kg m-2 which RDSUPR converts, all NCSNEC snow layers, WTD, ...).
+        # Do NOT use restartin.nc + LNF=.FALSE. for this: the driver only
+        # calls RDRES when NSTART /= 0, and this script always starts each
+        # year at NSTART=0, so that path silently cold-started every year
+        # from SOILINIT_SOURCE (found 2026-09-16: 37 years of "chained"
+        # runs had identical 1 January states).
+        ln -sf "$previous_restart" "$SOILINIT_RUN_NAME"
+        echo "Initial state (restart chain): $previous_restart -> $SOILINIT_RUN_NAME"
     fi
 
     if [[ "$RUN_CMF" == "true" ]]; then

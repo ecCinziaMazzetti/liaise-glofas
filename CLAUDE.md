@@ -1630,6 +1630,76 @@ Page: `sites.ecmwf.int/pad/liaise/chains/` and
 `https://claude.ai/artifact/GRAU87yGFPz2P5rotyUq1R` ("Two Chains on the
 Ebro", the "LIAISE Correction" design re-pointed at the 37-year runs).
 
+### The annual restart chain never carried the land state -- fixed (2026-09-16)
+
+**Every multi-year run made with `run/run_liaise_ecland.{sh,slurm}` before
+2026-09-16 cold-started the LAND every 1 January from `soilinit`**, including
+the 37-year CY50R1 control run above and the "final" pass of the 2-pass
+Fortran spin-ups in the GRDC benchmark (only CaMa-Flood's own river restart
+was ever chained). The scripts staged the previous year's restart as
+`restart_in.nc` and set `LNF=.FALSE.`, but the offline driver only calls
+`RDRES` (which opens the fixed name `restartin.nc`) when `NSTART /= 0`
+(`suinif1s.F90`), and `patch_namelist_for_year` always sets `NSTART=0` --
+so the restart was silently ignored and `soilinit` read instead, with no
+message. Verified, not inferred: in every year of the affected runs the
+first-hour `o_gg.nc` state (`SoilMoist` all layers, `SWE`, `AvgSurfT`) equals
+`soilinit` to 0.000 in all 235 cells and differs from the previous
+December's restart by up to 263 kg m-2 of soil water and 96 kg m-2 of SWE.
+
+How it was found: a spurious runoff pulse in the first hour of *every*
+year (domain mean 0.24 mm h-1 against 0.005 before and 0.045 after),
+traced to one `soilinit` cell (43.25N, -5.75E, the north-west corner;
+Cantabrian coast, CaMa basin 14, outside the Ebro) whose initial soil
+moisture (0.44-0.47 m3 m-3) exceeds the medium-soil saturation (0.439),
+so it dumps ~50 mm of sub-surface runoff at each "start" -- and CaMa-Flood
+routed that into 1-January peaks of thousands of m3/s downstream of it.
+That cell still needs its `soilinit` value capped at saturation
+(`init_clim`), but it only mattered because of the yearly cold start.
+
+**Fix**: both drivers now do what the reference `ecland_run_model.sh`
+`RLOOP` does -- link the previous year's `restartout.nc` **as `soilinit`**
+(`restartout.nc` is a superset of `soilinit`: `SoilMoist` in kg m-2, which
+`RDSUPR` converts, all `NCSNEC` snow layers, `WTD`, ...) and start the year
+normally (`NSTART=0`, `LNF=.TRUE.`). `INITIAL_RESTART` works the same way,
+so the spin-up path is repaired too. Proof (2-year 1988-1989 coupled test,
+`/ec/res4/scratch/pad/liaise_chain_test`): 1 January 1989 equals the 1988
+restart to 0.0000 in every variable, the runoff pulse is gone, and
+domain-mean discharge is continuous across the boundary (8.9 -> 9.1 m3/s).
+
+Consequences to keep in mind: the control-run diagnostics above are of 37
+independent one-year cold starts (the T2m trend and precipitation are
+forcing-driven and stand; soil-moisture memory, snow carry-over and
+anything sensitive to spin-up do not); the GRDC benchmark's Fortran side
+had no land spin-up (its CaMa-Flood storage spin-up did work); the first
+37-year coupled run of 2026-09-16 (`/perm/pad/liaise_cmf_1988_2024_NOCHAIN_invalid`,
+1 h 48 min, all years status 0) is superseded by the rerun launched with the
+fixed driver into `/perm/pad/liaise_cmf_1988_2024`.
+
+#### 37-year ecLand-CaMa-Flood run, restart chain verified (2026-09-16)
+
+`/perm/pad/liaise_cmf_1988_2024/` (job `37653123`, 1 h 56 min, 36 GB): the
+Sep-13 pinned control binary with `namelist/input_cmf1way` (= `namelist/input`
+with `LECMF1WAY=true`, `TCOUPFREQ=1` as in the five benchmark years,
+`CNMEXP="liaise_wfde5_cmf"`), `cama_flood/data/` statics, 1988 cold start,
+both restarts chained through 2024, 37/37 years status 0. Verified at all 36
+year boundaries: first-hour `SoilMoist` (4 layers), `SWEML` (5 layers) and
+`AvgSurfT` equal the previous December's restart to 0.000; domain-mean
+discharge changes by a median 8 % across the boundary (weather, not a
+reset); 1-way coupling means the land output is bit-identical to what the
+control run would give with the same chain, so this run is also the valid
+land control now. Routed discharge: 37-year domain mean 24.4 m3/s, peak
+14 814 m3/s (December 2003, Rhone), negative-value fraction 0.30 %, wettest
+year 1988, driest 2023. Against the cold-start run the chain lowers
+Jan-Mar discharge by a factor 1.5-4 and annual means by 15-45 % -- the
+missing land memory was not a small effect.
+
+Two quirks documented for the record: (a) the restart file's 2-D `SWE`
+field is the *top snow layer only* (`wrtres.F90` packs layer 1), while
+`SWEML` is complete and is what `RDSUPR` reads when `nlevsn` matches
+`NCSNEC` -- so `restart SWE /= sum(SWEML)` is expected, not a chain break;
+(b) `o_totout.nc` uses `1e20` as its fill value and `IFRQ_OUT=6` -- mask
+`>1e19` and aggregate to daily before feeding the reservoir scripts.
+
 ### Pinned binaries: the executable's RPATH is `$ORIGIN/../lib64` (2026-09-16)
 
 `ecland-master-dp` finds its own `libecland_surf_dp.so`/`libfiat.so`/... via

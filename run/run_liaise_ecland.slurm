@@ -385,10 +385,13 @@ for forcing_file in "${forcing_files[@]}"; do
         ln -sf "$SOILINIT_SOURCE" "$SOILINIT_RUN_NAME"
         echo "Initial state: $SOILINIT_SOURCE"
     else
-        cp -f "$previous_restart" "$RESTART_IN_NAME"
-        ln -sf "$SOILINIT_SOURCE" "$SOILINIT_RUN_NAME"
-        sed_inplace -e 's/^([[:space:]]*LNF[[:space:]]*=).*/\1 .FALSE./' "$NAMELIST_RUN_NAME"
-        echo "Restart input: $previous_restart -> $RESTART_IN_NAME"
+        # Continue from the previous year's restart by using it AS the
+        # initial-state file (ecland_run_model.sh's RLOOP mechanism). The
+        # restartin.nc + LNF=.FALSE. path is only honoured when NSTART /= 0,
+        # which this script never sets, so it silently cold-started every
+        # year from SOILINIT_SOURCE (found 2026-09-16). See run_liaise_ecland.sh.
+        ln -sf "$previous_restart" "$SOILINIT_RUN_NAME"
+        echo "Initial state (restart chain): $previous_restart -> $SOILINIT_RUN_NAME"
     fi
 
     if [[ "$RUN_CMF" == "true" ]]; then
