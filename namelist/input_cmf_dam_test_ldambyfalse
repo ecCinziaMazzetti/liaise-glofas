@@ -1,0 +1,129 @@
+&NRUNVER
+   LADPSTP=.TRUE.              ! true for adaptive time step
+   LFPLAIN=.TRUE.              ! true: consider floodplain (false: only river channel)
+   LKINE=.FALSE.                  ! true for kinematic river routing
+   LFLDOUT=.TRUE.              ! true: floodplain flow (high-water channel flow) active
+   LPTHOUT=.TRUE.              ! true: activate bifurcation scheme (dam cells' own bifurcation paths are
+                                ! disabled internally by cmf_ctrl_damout_mod -- safe to leave this on)
+   LDAMOUT  = .TRUE.             !  true: activate dam operation (Ebro reservoir plan, PLAN.md)
+   LROSPLIT =true ! true: input if surface (Qs) and sub-surface (Qsb) runoff
+   LWEVAP=false     ! true: Evap is recieved in CaMa-Flood and extracted from floodplains
+   LWEVAPFIX=.FALSE! true : extract water downstream to conserve water
+   LWEXTRACTRIV=FALSE ! true : extract water also from river channel
+   LGDWDLY=false ! True to activate ground water reservoir
+   LSLPMIX=.FALSE.            ! True to activate mixed kinematic and local inertia solution
+   LMEANSL=.FALSE.               ! true: boundary condition for mean sea level
+   LSEALEV=.FALSE.               ! true: boundary condition for variable sea level
+   LRESTART=false                 ! true: initial condition from restart file (patched per year by run_liaise_ecland.sh)
+   LSTOONLY=false                ! true for restart only from storage
+   LOUTPUT=.TRUE.                ! true: use standard output (to file)
+   LOUTINI=.TRUE.                ! true: output initial storage (netCDF only)
+   LGRIDMAP=.TRUE.               ! true: for standard XY gridded 2D map
+   LLEAPYR=.TRUE.                ! true: account for leap year (Feb29 skipped)
+   LMAPEND=.FALSE.               ! true: for map data endian conversion
+   LBITSAFE=.TRUE.               ! true: for Bit Identical simulation (avoid OSM ATOMIC)
+   LSLOPEMOUTH=.FALSE. ! true: prescribe water level slope == elevation slope on river month
+   /
+&NDIMTIME
+   CDIMINFO = "diminfo.txt"        ! text file for dimention information
+   ! IFRQ_INP: coupling frequency (hour) -- how often ecLand hands off
+   ! accumulated runoff to CaMa-Flood. Must equal TCOUPFREQ in
+   ! namelist/input; patched per year by run_liaise_ecland.sh from that
+   ! value, so don't maintain the two independently.
+   IFRQ_INP = 24
+   ! DT: nominal/max time step (sec). CaMa-Flood requires DTIN (its
+   ! internal coupling-interval timestep, = IFRQ_INP*3600) to be an exact
+   ! multiple of DT ("DTIN should be multiple of DT", checked at startup
+   ! -- confirmed the hard way: a static DT=86400 aborts as soon as
+   ! IFRQ_INP*3600 < 86400, e.g. IFRQ_INP=1). Setting DT == DTIN always
+   ! satisfies that trivially; LADPSTP=.TRUE. below still makes CaMa-Flood
+   ! substep adaptively (CFL) within each DT, so this need not match
+   ! ecLand's own TSTEP. Patched per year alongside IFRQ_INP/DROFUNIT.
+   DT       = 86400
+   /
+&NPARAM
+   PMANRIV  = 0.03D0                  ! manning coefficient river
+   PMANFLD  = 0.10D0                  ! manning coefficient floodplain
+   PGRV     = 9.8D0                     ! gravity accerelation
+   PDSTMTH  = 25000.D0                  ! downstream distance at river mouth [m]
+   PCADP    = 0.7                     ! CFL coefficient
+   PMINSLP  = 1.D-5                       ! minimum slope (kinematic wave)
+   IMIS     = -9999                       ! missing value for integer
+   RMIS     = 1.E20                       ! missing value for real*4
+   DMIS     = 1.E20                       ! missing value for real*8
+   CSUFBIN  = '.bin'                      ! file suffix for plain binary 2D map
+   CSUFVEC  = '.vec'                      ! file suffix for plain binary 1D vector
+   CSUFPTH  = '.pth'                      ! file suffix for plain binary bifurcation channel
+   CSUFCDF  = '.nc'                       ! file suffix for netCDF
+   /
+&NSIMTIME
+   SYEAR=1980    ! start year (patched per year by run_liaise_ecland.sh)
+   SMON=01     ! month
+   SDAY=01     ! day
+   SHOUR=00      ! hour
+   EYEAR=1980   ! end year (patched per year by run_liaise_ecland.sh)
+   EMON=12     ! end
+   EDAY=31     ! end
+   EHOUR=00      ! hour
+   /
+   &NMAP
+   LMAPCDF=.TRUE.                      ! true for netCDF map input
+   CPTHOUT="bifprm.txt"                ! bifurcation channel list
+   CRIVCLINC="rivclim.nc"              ! * netCDF river maps
+   CRIVPARNC="rivpar.nc"               ! * netCDF river width & depth
+   ! CMPIREGNC: MPI region map. Required even for a single-process run --
+   ! without it, RIVMAP_INIT tries to literally open a file named "NONE"
+   ! and aborts ("PROGRAM STOP!"); confirmed the hard way against
+   ! ecland-master-dp. Not actually used for region decomposition here
+   ! (NPROC_CMF=1), just needs to exist and match the clipped river grid.
+   CMPIREGNC="mpireg.nc"               ! * netCDF MPI region map
+   /
+&NRESTART
+   CRESTDIR="./"                       ! restart directory
+   CRESTSTO="restartin_cmf.nc"         ! restart file (fixed name; run_liaise_ecland.sh symlinks the previous year's output here)
+   LRESTCDF=.TRUE.                     ! true for netCDF restart file
+   CVNREST="restart"                   ! restart variable name
+   IFRQ_RST=0                          ! restart write frequency (1-24: hour, 0:end of run)
+   /
+&NFORCE
+   LINPCDF=false         ! true for netCDF input
+   LINTERP=true                 !  true for runoff interpolation using input matrix
+   LINPEND  = .FALSE.                 ! true for runoff endian conversion
+   LITRPCDF = .TRUE.                  ! * true for netCDF input matrix
+   CINPMAT="inpmat.nc"                ! input matrix file name
+   ! DROFUNIT: seconds per coupling interval (= TCOUPFREQ*3600); ecLand
+   ! hands off runoff accumulated in metres over that interval. Patched
+   ! per year by run_liaise_ecland.sh alongside IFRQ_INP -- don't maintain
+   ! the two independently.
+   DROFUNIT=86400.
+   CROFCDF="runoff.nc"             ! * netCDF input runoff file name (unused: runoff comes in-process from ecLand under LECMF1WAY)
+   CVNROF   = "Qs"                 ! * netCDF input runoff variable name
+   CVNSUB   = "Qsb"                 ! * netCDF input runoff variable name
+   SYEARIN=1980    ! * for netCDF input start date (start of the initial time step)
+   SMONIN=01
+   SDAYIN=01
+   SHOURIN=00
+   /
+&NOUTPUT
+   COUTDIR="./"                       ! output directory ("NONE" for no output)
+   CVARSOUT="rivsto,fldsto,gwsto,totout,fldfrc,wevap,daminf,damsto"    ! + dam inflow/storage vs the naturalised namelist/input_cmf
+   COUTTAG=""                          ! Output Tag Name for each experiment
+   LOUTVEC=.FALSE.                     ! for 1-D land-only output (small data size, post processing required)
+   LOUTCDF=.TRUE.                      ! true for netCDF output
+   NDLEVEL=0               ! Netcdf4 Deflation Level
+   IFRQ_OUT = 6       ! output data write frequency (hour)
+   /
+&NDAMOUT
+   ! Reservoir operation (Yamazaki/Funato-Hanazaki rules, CaMa-Flood v4.20).
+   ! dam_param.csv built by cama_flood/build_dam_param_csv.py from
+   ! cama_flood/estimate_dam_q100.py's output -- 39 Ebro-basin GRanD dams
+   ! (one per grid cell; 6 smaller co-located dams dropped, matching the
+   ! official p04_complete_damcsv.py's own dedup rule). FldVol uses the
+   ! 37%-of-capacity fallback (no GRSAD access yet, see PLAN.md) -- revisit
+   ! once GRSAD/ReGeom data lands.
+   CDAMFILE = "dam_param.csv"
+   LDAMTXT  = .TRUE.      ! damtxt-YYYY.txt per-reservoir storage/inflow/outflow
+   LDAMH22  = .FALSE.     ! Funato-Yamazaki rules (recommended), not Hanazaki 2022
+   LDAMYBY  = .FALSE.     ! DIAGNOSTIC TEST: all dams active from 1988, isolating the not-yet-built-cell interaction      ! reservoirs switch on at their construction year (dam_param.csv's DamYear column)
+   LiVnorm  = .FALSE.
+   /
