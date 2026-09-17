@@ -156,7 +156,51 @@ Tested the natural follow-on hypothesis — combine "exclude Flix" with `LDAMYBY
 
 **Four different configurations now, all failing at the identical calendar date, 19880520, via at least two distinct mechanisms** (negative storage at inactive cells; non-negative-storage instability in the release-rule's case-2/3/4 fractional-power terms). That consistency across configurations is itself the most important new data point: it's hard to explain by one dam's bad parameters alone, and much more consistent with **a genuinely extreme inflow event in the 1988 WFDE5 forcing landing around day ~141** that pushes several dams' inflow past their own `Qf` (itself a Q100-derived design threshold) simultaneously — i.e. the *event*, not any single dam, may be the real trigger, with different dams being the numerically weakest link depending on which are active/excluded.
 
-**`LiVnorm=.TRUE.` — untried, and the most likely fix (found 2026-09-17)**: the
+### `LiVnorm=.TRUE.` tested 2026-09-17 — REFUTED, zero effect, and two other hypotheses fell with it
+
+Job `38013448`, identical to crash #3 (no-Flix 38-dam `dam_param.csv`,
+`LDAMYBY=.TRUE.`) with `LiVnorm` flipped and **nothing else** (verified by diff
+before submitting). Result: **crashed at 19880520 again**, 1m13s, same SIGFPE,
+and its `damtxt-1988.txt` is **byte-identical** to the `LiVnorm=.FALSE.` run's.
+Not "similar" — bit for bit. The flag changed nothing.
+
+**Why it could never have worked** (the reasoning error in the hypothesis
+below): `LiVnorm` sets initial storage *at the year a reservoir is first
+activated*. Every affected dam activates in 1989-2016, so in a crash occurring
+in **1988** the flag is inert by construction. "Not yet built" is not the same
+state as "just activated", and the hypothesis conflated them.
+
+Two further hypotheses were refuted by the diagnostics this run enabled:
+
+**(a) The "genuinely extreme inflow event around 1988-05-20" reading is wrong.**
+Checked the naturalised control's own 1988 discharge directly: 1988-05-20 ranks
+**94/367 by domain-mean and 109/367 by peak-cell discharge** — an ordinary day.
+Domain mean ~72 m3/s against 136-158 m3/s on the late-January/February peak days,
+which the same configuration survives without trouble. The surrounding window is
+a flat recession (75.2, 72.3, 64.6, 59.5 m3/s). Whatever selects this date, it is
+not flood magnitude.
+
+**(b) The four not-yet-built dams are not the dynamic trigger.** Their storage is
+**frozen** for the entire run — ItoizDam -0.26, Rialb -0.07, SanSalvador -0.01,
+Pajares -0.02 MCM, constant, zero sign changes across all 564 records. Earlier
+notes describing them as having "gone storage-negative by day 141" implied a
+progressive drift into failure; they are in fact negative from the start and
+never move. Also newly observed: these dams show `TotVol`/`NrmVol` = **-9.00**
+(undef) in `damtxt` at runtime even though `dam_param.csv` carries real volumes
+for them (ItoizDam: FldVol 216.82, ConVol 369.18, TotVol 586.0) — i.e. the model
+deliberately marks not-yet-built reservoirs undef, as designed.
+
+**Where that leaves it**: the failing reservoir is an **active** one, failing on
+an unremarkable day, in a fractional-power term. The overshoot screen
+(2026-09-17, all 45 dams, volume through in one coupling hour vs the case-2
+storage band) flags exactly four dams above 1.0x — Flix, **LaPena**, Terradets,
+SanLorenzoMongay — and Flix is excluded from this dam set. **LaPena is the
+strongest remaining candidate** and is the next thing to test, not another
+namelist flag.
+
+---
+
+**Superseded hypothesis, kept for the record**: the
 v4.20 reservoir manual documents `LiVnorm` as controlling initial storage when a
 reservoir first activates under `LDAMYBY=.TRUE.` — `.FALSE.` (our setting, and the
 default) activates it with *zero additional storage*, `.TRUE.` activates it at
