@@ -48,15 +48,54 @@ reference):
 - glb_03min: job `37776709`, `RUN_ROOT=/perm/pad/liaise_cmf_1988_2024_03min`,
   `--time=20:00:00` (budget: ~25min/year x 37 ~= 15.7h, same basis).
 
-Both confirmed started correctly (right `RUN_ROOT`, right namelist, 1988
-cold start) before being left to run unattended. **Not yet done**: waiting
-for completion; then extract discharge at the (resolution-specific!) GRDC/
-CAMELS-Spain gauge grid cells — `cama15_iy/ix` from the observation file are
-glb_15min-specific and must be re-derived per resolution (nearest-cell match
-against each resolution's own `ncdata.nc`, same method as
-`estimate_dam_q100.py`'s `load_dams()`) — score with
-`skill_benchmark_control.py`-style KGE/NSE/r/PBIAS, and build a 3-resolution
-comparison dashboard, deployed to `sites.ecmwf.int/pad/liaise/`.
+**Status 2026-09-17**: glb_06min **finished** (37/37 years, 4h17m). glb_03min
+was found running effectively single-threaded — `--export=ALL` had propagated
+an `OMP_NUM_THREADS=1` from the submitting shell, which the run script's own
+`${OMP_NUM_THREADS:-4}` default cannot override (that only applies when the
+variable is *unset*). Killed and resumed from year 2001 with the new
+`START_YEAR`/`INITIAL_RESTART` support and `OMP_NUM_THREADS=4` forced
+explicitly (job `37911517`); CPU went from ~95% (1 core) to ~197% (~2 cores of
+the 4 allocated — the remainder is the model's own ~50% parallel efficiency,
+an Amdahl ceiling, not a job-request problem).
+
+**Measured cost per simulated month** (all single-threaded, so comparable):
+15 arcmin 0.24 min/month (1,405 cells, 1h46m for 37 yr) · 6 arcmin 0.58
+min/month (8,573 cells, 4h17m) · 3 arcmin 3.00 min/month (34,137 cells,
+~22h). Note 15→6 costs only 2.4x for 6.1x more cells (sub-linear — the land
+half is fixed cost), but 6→3 costs 5.2x for 4x more cells (super-linear —
+finer spacing also shortens the CFL-stable timestep).
+
+**Result, 15 vs 6 arcmin** (`cama_flood/skill_benchmark_resolution.py`, both
+scored fresh over 1988–2020, 53 gauges, 1389 station-years each, identical
+(station, year) key sets, no row reuse): **6 arcmin is better**. Median over
+station-years excluding regulated CASPE — KGE 0.120 vs 0.005, NSE −0.02 vs
+−0.19, r 0.545 vs 0.498, PBIAS −39.4% vs −45.0%. 6 arcmin wins 56% of
+station-years and 32/52 gauges; by per-gauge median KGE, 31/51 gauges are
+positive at 6 arcmin vs 25/51 at 15 arcmin. Largest gains are at small
+catchments the 0.25° network over-allocates (SIGÜES +1.06, BINIES +0.75,
+JILOCA +0.73). Both still under-predict volume everywhere. Gauge-to-cell
+mapping uses the station archive's own per-resolution allocations
+(`Cama15/6/3lon/lat`), validated by the 15 arcmin case reproducing the
+observation file's stored `cama15_iy/ix` exactly for all 53 stations.
+
+**Two gauges flagged and excluded from headline medians** (still drawn, with a
+visible warning): `RIO GUADALOPE, CASPE` (regulated, near-zero baseflow breaks
+variance-based scores) and `TUDELA` — a genuine allocation error in the
+upstream station archive, which puts a 2,534 km² tributary gauge on a ~25,000
+km² Ebro main-stem cell, so the model simulates a different river (obs ~19
+vs sim ~141 m³/s, PBIAS ≈ +610% at *both* resolutions).
+
+**Dashboards deployed** with clickable experiment + metric selectors (KGE,
+NSE, Correlation, PBIAS, Bias), per-gauge side-by-side comparison, a Δ column
+and multi-line sparklines: `sites.ecmwf.int/pad/liaise/gauges/` (15 vs 6
+arcmin, 3 arcmin shown as pending) and `…/chains/` (Fortran vs eclandpy→GPU
+chain, rebuilt on the same generator). Adding 3 arcmin needs only one more
+`--experiment` flag once its run and scoring finish.
+
+**Remaining**: wait for glb_03min, score it with
+`skill_benchmark_resolution.py --resolution 03min`, then re-run
+`build_resolution_dashboard.py` with a third `--experiment` and drop the
+`--pending "3 arcmin"` flag.
 
 ## Paused tonight, not abandoned: Reservoir operation on the Ebro (CaMa-Flood v4.20 dam module)
 
