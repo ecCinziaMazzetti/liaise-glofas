@@ -156,6 +156,58 @@ Tested the natural follow-on hypothesis — combine "exclude Flix" with `LDAMYBY
 
 **Four different configurations now, all failing at the identical calendar date, 19880520, via at least two distinct mechanisms** (negative storage at inactive cells; non-negative-storage instability in the release-rule's case-2/3/4 fractional-power terms). That consistency across configurations is itself the most important new data point: it's hard to explain by one dam's bad parameters alone, and much more consistent with **a genuinely extreme inflow event in the 1988 WFDE5 forcing landing around day ~141** that pushes several dams' inflow past their own `Qf` (itself a Q100-derived design threshold) simultaneously — i.e. the *event*, not any single dam, may be the real trigger, with different dams being the numerically weakest link depending on which are active/excluded.
 
+### ROOT CAUSE IDENTIFIED 2026-09-17: unguarded `(DamVol/ConVol)**0.5` on an empty reservoir
+
+After the LaPena test refuted the last dam-specific hypothesis (below), the
+traceback plus the source settle it. `ecland`'s
+`src/surf/cmflood/cmf_ctrl_damout_mod.F90`, Funato-Yamazaki branch
+(`LDAMH22=.FALSE.`, ours), **case 1 "water use"**:
+
+```fortran
+IF( DamVol<=ConVol(IDAM) )THEN
+  DamOutflw = Qn(IDAM) * (DamVol/ConVol(IDAM))**0.5      ! <-- no non-negativity guard
+```
+
+`DamVol` is **not clamped at zero**. For an active reservoir (`ConVol>0`) any
+negative storage makes the base negative, and a negative base under `**0.5` is a
+floating-point *invalid operation* — which is exactly the crash:
+`__libm_pow_e7` called from `cmf_ctrl_damout_mod_mp_cmf_damout_calc_`
+(backtrace, job 38017392). `0.0**0.5` is fine, so the storage must genuinely go
+negative.
+
+**Why it happens here**: by 1988-05-20 **seven active reservoirs are pinned at
+zero storage** — Alloz, ElGrado1, Eugui, Irabia, LaSotonera, Ordunte, Pena, all
+printing 0.0000 MCM (damtxt prints 2 d.p., so anything in +/-0.005 is invisible).
+They are empty because the domain is in a **spring recession** (domain-mean
+discharge falling 75.2 -> 72.3 -> 64.6 -> 59.5 m3/s across the crash window), not
+in flood. Dam cells are simultaneously excluded from `CALC_ADPSTP`'s adaptive
+timestep (`I2MASK>0`, documented earlier in this file), so the timestep is chosen
+without regard to how fast these small reservoirs are draining, and storage
+undershoots below zero.
+
+**This explains every observation that defeated the earlier hypotheses:**
+
+| Observation | Explained by |
+|---|---|
+| Crash date invariant across 6 configurations | It is not one pathological dam; ~7 reservoirs reach empty together on the recession |
+| Excluding Flix didn't help; excluding LaPena didn't help | Removing one empty reservoir leaves six others in the same state |
+| `LiVnorm`/`LDAMYBY` made no difference (byte-identical output) | Those govern *not-yet-built* dams; this is an *active* dam in water-use mode |
+| 1988-05-20 is an ordinary day (rank 94/367) | It is a **drought** failure, not a flood failure — the opposite of what was assumed |
+| Invisible in `damtxt` | 4 records/day cannot resolve an intra-timestep undershoot |
+| The overshoot-vs-Qf screen failed to predict it | That screen measures *flood* band traversal; this is the empty end of the curve |
+
+**Proposed fix (upstream, one line)**: clamp the base, e.g.
+`max(DamVol,0._JPRB)/ConVol(IDAM)`, in case 1 — and check cases 2/3's `**3.0` and
+`**0.1` terms for the same exposure. This is a genuine CaMa-Flood v4.20 defect,
+worth reporting alongside the `allocate_dam.F90` `dd` bug in
+`docs/cama_flood_reservoir_methodology.md`.
+
+**NOT yet done**: patching `/perm/pad/ecland` is a shared-checkout change and a
+rebuild there has already once corrupted a running job (see CLAUDE.md, 37-year
+control run). Agree the approach before touching it.
+
+---
+
 ### `LiVnorm=.TRUE.` tested 2026-09-17 — REFUTED, zero effect, and two other hypotheses fell with it
 
 Job `38013448`, identical to crash #3 (no-Flix 38-dam `dam_param.csv`,
@@ -194,9 +246,11 @@ deliberately marks not-yet-built reservoirs undef, as designed.
 an unremarkable day, in a fractional-power term. The overshoot screen
 (2026-09-17, all 45 dams, volume through in one coupling hour vs the case-2
 storage band) flags exactly four dams above 1.0x — Flix, **LaPena**, Terradets,
-SanLorenzoMongay — and Flix is excluded from this dam set. **LaPena is the
-strongest remaining candidate** and is the next thing to test, not another
-namelist flag.
+SanLorenzoMongay — and Flix is excluded from this dam set. **LaPena was the
+strongest remaining candidate** — tested as job `38017392` (37 dams, LaPena the
+only changed row, verified by diff) and **refuted**: same crash, same
+19880520, same 566 damtxt records. That closed the dam-specific line of enquiry
+and led to the root cause recorded above.
 
 ---
 
