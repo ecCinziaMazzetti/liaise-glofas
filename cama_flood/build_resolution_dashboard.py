@@ -386,6 +386,20 @@ const METRICS = __METRICS_JSON__;
 const EXPERIMENTS = __EXPERIMENTS_JSON__;
 const PENDING = __PENDING_JSON__;
 const HEADLINE = __HEADLINE_JSON__;
+const CAVEAT_NAMES = __CAVEATS_JSON__;
+
+// Per-metric "how many gauges are good" bar. Each metric needs its own: NSE > 0 is the
+// classic "better than predicting the mean observed flow" test, but the equivalent bar
+// for KGE is NOT 0 -- it is 1 - sqrt(2) ~= -0.41 (Knoben et al. 2019, HESS) -- so
+// labelling KGE > 0 as "beats the mean-flow benchmark" would be wrong. KGE > 0 is
+// reported here as its own, stricter and commonly used, bar.
+const METRIC_STATS = {
+  kge:   { test: v => v > 0,             label: 'gauges with KGE &gt; 0' },
+  nse:   { test: v => v > 0,             label: 'gauges beating climatology (NSE &gt; 0)' },
+  r:     { test: v => v > 0.5,           label: 'gauges with r &gt; 0.5' },
+  pbias: { test: v => Math.abs(v) <= 25, label: 'gauges within &plusmn;25% volume' },
+  bias:  { test: v => v > 0,             label: 'gauges over-predicting (bias &gt; 0)' },
+};
 
 let currentExp = EXPERIMENTS[0];
 let currentMetric = METRICS[0].key;
@@ -438,12 +452,28 @@ function valueFor(s, exp, key, year) {
 function renderStats() {
   const h = HEADLINE[currentExp];
   if (!h) { document.getElementById('stats').innerHTML = ''; return; }
+  // Computed here rather than baked in at build time, so every tile follows the metric
+  // and year selectors instead of being stuck on all-year KGE.
+  const m = metricDef(currentMetric), spec = METRIC_STATS[currentMetric];
+  const vals = [];
+  STATIONS.forEach(s => {
+    if (s.caveat || !s.exp[currentExp]) return;
+    const v = valueFor(s, currentExp, currentMetric, currentYear);
+    if (v !== null && v !== undefined && !Number.isNaN(v)) vals.push(v);
+  });
+  const sorted = [...vals].sort((a, b) => a - b);
+  const med = sorted.length
+    ? (sorted.length % 2 ? sorted[(sorted.length - 1) / 2]
+                         : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
+    : null;
+  const passing = vals.filter(spec.test).length;
+  const yearLbl = currentYear === 'all' ? `${h.year_min}–${h.year_max}` : currentYear;
   document.getElementById('stats').innerHTML = `
     <div class="stat"><div class="num tnum">${currentExp}</div><div class="lbl">__EXPNOUN_LOWER__</div></div>
-    <div class="stat"><div class="num tnum">${h.n_stations}</div><div class="lbl">gauges in headline stats (${h.year_min}–${h.year_max})${h.n_caveat ? ` · ${h.n_caveat} flagged, excluded` : ''}</div></div>
-    <div class="stat"><div class="num tnum">${h.station_years}</div><div class="lbl">station-years</div></div>
-    <div class="stat"><div class="num tnum">${h.median_kge === null ? '—' : h.median_kge.toFixed(3)}</div><div class="lbl">median KGE across gauges</div></div>
-    <div class="stat"><div class="num tnum">${h.positive_kge}/${h.n_scored}</div><div class="lbl">gauges beating the mean-flow benchmark</div></div>`;
+    <div class="stat"><div class="num tnum">${vals.length}</div><div class="lbl">gauges scored, ${yearLbl}${h.n_caveat ? ` · ${h.n_caveat} flagged, excluded` : ''}</div></div>
+    <div class="stat"><div class="num tnum">${currentYear === 'all' ? h.station_years : vals.length}</div><div class="lbl">${currentYear === 'all' ? 'station-years' : 'gauges with data this year'}</div></div>
+    <div class="stat"><div class="num tnum">${med === null ? '—' : fmtMetric(med, currentMetric)}</div><div class="lbl">median ${m.label} across gauges</div></div>
+    <div class="stat"><div class="num tnum">${vals.length ? passing + '/' + vals.length : '—'}</div><div class="lbl">${spec.label}</div></div>`;
 }
 function renderExpChips() {
   const el = document.getElementById('exp-chips');
@@ -668,6 +698,15 @@ footer = ((args.intro_html or default_intro) +
     "<code>RIO GUADALOPE, CASPE</code> is a regulated river whose near-zero baseflow sends "
     "variance-based scores to extreme values — a metric artifact, not a model failure. Colour scales "
     "are clipped at the legend bounds; the real number is always shown in the panel and table.</p>"
+    "<p><b>The count tile</b> uses a bar appropriate to each metric, since they are not "
+    "interchangeable: NSE &gt; 0 is the classic \"better than predicting the mean observed "
+    "flow\" test; the equivalent bar for KGE is <i>not</i> 0 but 1&nbsp;&minus;&nbsp;&radic;2 "
+    "&asymp; &minus;0.41 (Knoben et al. 2019), so KGE&nbsp;&gt;&nbsp;0 is reported as its own, "
+    "stricter bar rather than being mislabelled as the mean-flow benchmark. Correlation uses "
+    "r&nbsp;&gt;&nbsp;0.5, PBIAS uses &plusmn;25% of observed volume, and Bias — being an "
+    "absolute m³/s quantity that spans orders of magnitude between the Ebro main stem and a "
+    "100&nbsp;km² headwater — has no meaningful fixed threshold, so it reports the "
+    "over-predicting count instead. The median tile follows the selected metric and year.</p>"
     "<p>Method: <code>cama_flood/skill_benchmark_resolution.py</code> · page: "
     "<code>cama_flood/build_resolution_dashboard.py</code></p>"
 )
@@ -677,6 +716,7 @@ html = html.replace("__TITLE__", args.title)
 html = html.replace("__SUBTITLE__", args.subtitle)
 html = html.replace("__EXPNOUN__", args.experiment_noun)
 html = html.replace("__EXPNOUN_LOWER__", args.experiment_noun.lower())
+html = html.replace("__CAVEATS_JSON__", json.dumps(sorted(caveat_names)))
 html = html.replace("__STATIONS_JSON__", json.dumps(stations))
 html = html.replace("__RIVER_JSON__", json.dumps(RIVER_SEGMENTS))
 html = html.replace("__METRICS_JSON__", json.dumps(metrics))
