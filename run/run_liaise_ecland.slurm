@@ -272,6 +272,29 @@ fi
 IFS=$'\n' forcing_files=($(printf '%s\n' "${forcing_files[@]}" | sort))
 unset IFS
 
+# START_YEAR/END_YEAR: restrict the annual loop to a sub-range, for resuming
+# a run that hit its time limit partway through without redoing already-
+# completed years. Pair with INITIAL_RESTART(_CMF) pointing at the last
+# completed year's restart so the resumed run continues the same chain
+# rather than cold-starting. Both default to unrestricted (all years found),
+# so this changes nothing for a normal from-scratch run.
+if [[ -n "${START_YEAR:-}" || -n "${END_YEAR:-}" ]]; then
+    filtered=()
+    for f in "${forcing_files[@]}"; do
+        b=$(basename "$f")
+        [[ "$b" =~ ^WFDE5_CRU_GPCC_([0-9]{4})_ecland\.nc$ ]] || continue
+        y="${BASH_REMATCH[1]}"
+        (( y >= ${START_YEAR:-0} )) || continue
+        (( y <= ${END_YEAR:-9999} )) || continue
+        filtered+=("$f")
+    done
+    forcing_files=("${filtered[@]}")
+    if (( ${#forcing_files[@]} == 0 )); then
+        echo "ERROR: START_YEAR/END_YEAR filter (${START_YEAR:-<none>}-${END_YEAR:-<none>}) matched no forcing files" >&2
+        exit 1
+    fi
+fi
+
 echo "Found ${#forcing_files[@]} annual forcing files:"
 printf '  %s\n' "${forcing_files[@]}"
 
