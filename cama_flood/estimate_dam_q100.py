@@ -8,14 +8,35 @@ dam module (`cmf_ctrl_damout_mod.F90`, already in `ecland`, currently off via
 `LDAMOUT=.FALSE.`) needs a `dam_param.csv` with, per reservoir: normal/flood discharge
 derived from the naturalised annual mean and the Gumbel-fit 100-year flood.
 
-Dam allocation, not re-run here: `GRanD_allocated.csv` (from the CaMa-Flood v4.20
-package) ships each dam ALREADY allocated to the global glb_15min river network
-(`lat_alloc`/`lon_alloc`), so no Fortran `allocate_dam` build/run is needed -- this
-script just nearest-cell-matches those coordinates against our own regional
-`cama_flood/data/ncdata.nc` grid (same 0.25deg glb_15min grid, confirmed identical
-topology across CaMa-Flood package vintages elsewhere in this project) and keeps
-whichever dams fall in the same `basin` id as a known Ebro cell. Matches the
-feasibility artifact's own count exactly: 45 dams, 7.77 km3 total capacity.
+Dam allocation: AREA-AWARE, not nearest-cell (fixed 2026-09-17 -- see below).
+`GRanD_allocated.csv` (from the CaMa-Flood v4.20 package) ships each dam already
+allocated on the package's own river network, recording both the allocated
+coordinates (`lat_alloc`/`lon_alloc`) and, crucially, the upstream area that
+allocation drains (`area_alloc`). That allocation is excellent -- `area_alloc`
+matches each dam's real reported catchment (`area_ori`) to a median 1.00x, zero
+dams off by more than 2x.
+
+Earlier versions of this script assumed `lat_alloc`/`lon_alloc` were snapped to
+the glb_15min grid and simply nearest-cell-matched them. **They are not snapped
+to any regular grid** (checked 2026-09-17: 0% of the 7320 global dams' coordinates
+sit at a cell centre at 1/3/6/15 arcmin), so nearest-cell matching put small
+tributary dams on whatever large river dominates the coarse cell -- it reproduced
+the allocator's own `area_alloc` for only 3 of 45 Ebro dams, with errors up to 21x
+(Ordunte: 47 km2 real catchment, matched to a 987 km2 cell). Same class of bug as
+the GRDC gauge-matching one in CLAUDE.md: geographic "nearest" is not the same
+position on the river network.
+
+The fix: search a small neighbourhood (`--alloc-radius`, default 0.30 deg) around
+the allocated coordinates and take the cell whose own `uparea` best matches
+`area_alloc` in log space, restricted to the target basin. Allocation quality is
+reported per dam (`uparea_err_pct` in the output CSV) and summarised at the end --
+never assume it worked, check the number.
+
+Resolution matters here and is not a detail: within 20% of `area_alloc`, this
+allocates 19/45 dams at glb_15min, 43/45 at glb_06min and 45/45 at glb_03min.
+Most of these reservoirs are simply not siteable on a 0.25deg grid at all (a
+28 km2 catchment cannot exist where the smallest cell drains ~770 km2), so
+per-dam Q100 at glb_15min is structurally limited no matter how good the code is.
 
 Naturalised discharge source, two options (pass one or both):
   --fortran-tmpl   the Fortran ecLand-CaMa-Flood coupled run's own o_totout.nc
@@ -58,37 +79,123 @@ EULER_MASCHERONI = 0.5772156649015329
 GLOBAL_WEST, GLOBAL_NORTH, GLOBAL_DLON, GLOBAL_DLAT, GLOBAL_NY = -180.0, 90.0, 0.25, 0.25, 720
 
 
-def load_dams(grand_csv, ncdata_path, liaise_cell):
+def _unmask(var):
+    a = var[:]
+    return np.asarray(a.filled(-1)) if np.ma.isMaskedArray(a) else np.asarray(a)
+
+
+def find_target_basin(lat, lon, basin, uparea, mouth_box=(40.4, 41.0, 0.5, 1.2)):
+    """Basin id of the Ebro, found by network position rather than a fixed cell.
+
+    A hardcoded lat/lon (the old `--liaise-cell`) is masked/off-network at
+    glb_06min and glb_03min, where that exact coordinate is not a river cell --
+    so it silently yielded no dams at all at finer resolutions. Taking the basin
+    of the largest-upstream-area cell near the Ebro mouth works at every
+    resolution tried (15/06/03 arcmin all return basin id 4, mouth uparea
+    ~84,737 km2, matching the real Ebro).
+    """
+    s, n, w, e = mouth_box
+    iys = np.where((lat >= s) & (lat <= n))[0]
+    ixs = np.where((lon >= w) & (lon <= e))[0]
+    if iys.size == 0 or ixs.size == 0:
+        raise SystemExit(f"mouth box {mouth_box} lies outside this grid")
+    sub = uparea[np.ix_(iys, ixs)]
+    j = np.unravel_index(np.argmax(sub), sub.shape)
+    return basin[iys[j[0]], ixs[j[1]]], float(sub.max()) / 1e6
+
+
+def allocate_cell(lat, lon, basin, uparea, target_basin, dlat, dlon, area_alloc, radius):
+    """Cell within `radius` whose uparea best matches the allocator's own area_alloc.
+
+    Returns (ix, iy, uparea_km2, err_pct) or None.
+
+    Two questions get answered separately here, and conflating them produces
+    garbage in both directions (both failure modes were hit on 2026-09-17):
+
+    1. *Which river system is this dam on?* -> decided by the caller from the
+       nearest valid river cell (proximity). Searching all basins for the best
+       AREA match instead wrongly dropped 14 genuine Ebro reservoirs -- the Ebro
+       dam itself, Bubal, Eugui, Irabia, Ullivarri, Urrunaga and others, all with
+       18-467 km2 catchments that no 0.25 deg Ebro cell can represent, so a
+       neighbouring basin's headwater cell won on area alone. Conversely,
+       restricting the area search to the target basin dragged IN 17 non-Ebro
+       dams from across the divide (Duero's AguilardeCampoo/CuerdadelPozo, the
+       French Ariege's Naguilhes/Matemale), because at 0.25 deg a 0.30 deg radius
+       reaches over the watershed.
+    2. *Which cell should its Q100 be read from?* -> that, and only that, is what
+       the area match decides, within the already-chosen basin.
+
+    Basin assignment near the Pyrenean divide is genuinely unresolvable at
+    glb_15min (a 0.25 deg cell straddles it), so a few French-slope dams remain
+    assigned to the Ebro there; they resolve correctly at finer resolutions.
+    """
+    if not (area_alloc > 0):
+        return None
+    best = None
+    for iy in np.where(np.abs(lat - dlat) <= radius)[0]:
+        for ix in np.where(np.abs(lon - dlon) <= radius)[0]:
+            if basin[iy, ix] != target_basin:
+                continue
+            a = float(uparea[iy, ix]) / 1e6
+            if a <= 0:
+                continue
+            err = abs(math.log(a / area_alloc))
+            if best is None or err < best[0]:
+                best = (err, int(ix), int(iy), a)
+    if best is None:
+        return None
+    _, ix, iy, a = best
+    return ix, iy, a, abs(a - area_alloc) / area_alloc * 100.0
+
+
+def load_dams(grand_csv, ncdata_path, radius=0.30):
     ds = nc.Dataset(ncdata_path)
     lat = np.asarray(ds.variables["lat"][:])
     lon = np.asarray(ds.variables["lon"][:])
-    basin = np.asarray(ds.variables["basin"][:])
-    uparea = np.asarray(ds.variables["uparea"][:])
+    basin = _unmask(ds.variables["basin"])
+    uparea = _unmask(ds.variables["uparea"])
 
-    liaise_lat, liaise_lon = liaise_cell
-    iy0 = int(np.argmin(np.abs(lat - liaise_lat)))
-    ix0 = int(np.argmin(np.abs(lon - liaise_lon)))
-    target_basin = basin[iy0, ix0]
+    target_basin, mouth_area = find_target_basin(lat, lon, basin, uparea)
+    print(f"target basin id {target_basin} (mouth uparea {mouth_area:.0f} km2), "
+          f"grid {len(lat)}x{len(lon)}, allocation radius {radius} deg")
 
-    dams = []
+    dams, unallocated = [], []
     with open(grand_csv, newline="") as fh:
         for row in csv.DictReader(fh):
             try:
                 dlat, dlon = float(row["lat_alloc"]), float(row["lon_alloc"])
+                area_alloc = float(row["area_alloc"])
             except ValueError:
                 continue
             if not (lat.min() - 0.5 <= dlat <= lat.max() + 0.5 and lon.min() - 0.5 <= dlon <= lon.max() + 0.5):
                 continue
-            iy = int(np.argmin(np.abs(lat - dlat)))
-            ix = int(np.argmin(np.abs(lon - dlon)))
-            b = basin[iy, ix]
-            if np.ma.is_masked(b) or b != target_basin:
+            # Step 1: basin membership, from the nearest river cell (proximity).
+            iy_n = int(np.argmin(np.abs(lat - dlat)))
+            ix_n = int(np.argmin(np.abs(lon - dlon)))
+            if basin[iy_n, ix_n] != target_basin:
                 continue
+            # Step 2: which cell to read Q100 from, by drainage-area match.
+            hit = allocate_cell(lat, lon, basin, uparea, target_basin, dlat, dlon, area_alloc, radius)
+            if hit is None:
+                continue
+            ix, iy, ua_km2, err_pct = hit
             dams.append({
                 "name": row["DamName"], "river": row["RiverName"], "cap_mcm": float(row["CAP_MCM"]),
                 "year": row["YEAR"], "ix": ix, "iy": iy, "lat": float(lat[iy]), "lon": float(lon[ix]),
-                "uparea_km2": float(uparea[iy, ix]) / 1e6,
+                "uparea_km2": ua_km2, "area_alloc_km2": area_alloc, "uparea_err_pct": err_pct,
             })
+            if err_pct > 20.0:
+                unallocated.append((row["DamName"], area_alloc, ua_km2, err_pct))
+
+    errs = np.array([d["uparea_err_pct"] for d in dams])
+    if errs.size:
+        print(f"allocation quality: {int((errs <= 20).sum())}/{len(dams)} dams within 20% of "
+              f"area_alloc, median error {np.median(errs):.1f}%")
+    if unallocated:
+        print(f"  {len(unallocated)} dam(s) worse than 20% -- their Q100 is NOT trustworthy "
+              f"at this resolution:")
+        for name, aa, ua_km2, e in sorted(unallocated, key=lambda t: -t[3])[:10]:
+            print(f"    {name:<20} wanted {aa:>8.0f} km2, best cell drains {ua_km2:>8.0f} km2 ({e:.0f}% off)")
     return dams, target_basin
 
 
@@ -179,13 +286,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--grand-csv", default="/perm/pad/cmf_v420_pkg_20240430/map/data/GRanD_allocated.csv")
     ap.add_argument("--ncdata", default="data/ncdata.nc")
-    ap.add_argument("--liaise-cell", nargs=2, type=float, default=[40.625, 0.875])
+    ap.add_argument("--alloc-radius", type=float, default=0.30,
+                    help="search radius (deg) for area-aware dam allocation; "
+                         "the cell with the closest uparea to area_alloc wins")
     ap.add_argument("--fortran-tmpl", default=None)
     ap.add_argument("--gpu-tmpl", default=None)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    dams, basin_id = load_dams(args.grand_csv, args.ncdata, args.liaise_cell)
+    dams, basin_id = load_dams(args.grand_csv, args.ncdata, args.alloc_radius)
     print(f"{len(dams)} GRanD dams matched to basin {basin_id} (Ebro), "
           f"total capacity {sum(d['cap_mcm'] for d in dams)/1000:.2f} km3")
 
@@ -240,7 +349,8 @@ def main():
 
         rows.append(row)
 
-    fieldnames = ["name", "river", "cap_mcm", "year", "ix", "iy", "lat", "lon", "uparea_km2", "basin_id",
+    fieldnames = ["name", "river", "cap_mcm", "year", "ix", "iy", "lat", "lon", "uparea_km2",
+                  "area_alloc_km2", "uparea_err_pct", "basin_id",
                   "fortran_n_years", "fortran_q_mean", "fortran_q_max_mean", "fortran_q10", "fortran_q100",
                   "gpu_n_years", "gpu_q_mean", "gpu_q_max_mean", "gpu_q10", "gpu_q100"]
     with open(args.out, "w", newline="") as fh:
