@@ -92,10 +92,36 @@ arcmin, 3 arcmin shown as pending) and `…/chains/` (Fortran vs eclandpy→GPU
 chain, rebuilt on the same generator). Adding 3 arcmin needs only one more
 `--experiment` flag once its run and scoring finish.
 
-**Remaining**: wait for glb_03min, score it with
-`skill_benchmark_resolution.py --resolution 03min`, then re-run
-`build_resolution_dashboard.py` with a third `--experiment` and drop the
-`--pending "3 arcmin"` flag.
+**COMPLETE 2026-09-17 — 3 arcmin scored, dashboard rebuilt with all three.**
+
+glb_03min: job `37911517`, `COMPLETED 0:0`, 10h08m, 37/37 years. Scored over the
+identical 1389 station-year key set as the other two (1342 after excluding
+regulated CASPE and mis-allocated TUDELA):
+
+| metric | 15 arcmin | 6 arcmin | 3 arcmin |
+|---|---|---|---|
+| median KGE | 0.012 | 0.124 | **0.132** |
+| median NSE | -0.183 | -0.007 | -0.004 |
+| median r | 0.492 | **0.541** | 0.539 |
+| median PBIAS | -46.1% | **-40.2%** | -40.7% |
+| gauges with positive median KGE | 25/51 | 31/51 | **33/51** |
+
+Head-to-head on station-years won: 6 beats 15 in **57%**, 3 beats 15 in **57%**,
+but 3 beats 6 in only **52%** — a coin flip.
+
+**Conclusion: 6 arcmin is the sweet spot; 3 arcmin is not worth its cost here.**
+Nearly all the skill gain is in the 15->6 step (KGE +0.112); 6->3 adds +0.008 and
+actually *loses* slightly on r and PBIAS, while costing 5.2x more compute
+(3.00 vs 0.58 min per simulated month; 10h08m vs 4h27m wall-clock for 37 years).
+Biggest per-gauge gains are at small catchments the 0.25deg network
+over-allocates — SIGÜES +1.14 KGE, JILOCA +0.96, BINIES +0.94, SANGÜESA +0.75 —
+and these are essentially captured by 6 arcmin already. A few gauges get worse
+with refinement (ASPURZ -0.34, VERO -0.20, ESTELLA -0.18).
+
+This matches the Q100 finding above independently: 6 arcmin captures most of the
+allocation benefit (41/44 dams sited vs 43/43 at 3 arcmin) and all of the
+skill benefit. Dashboard with all three experiments deployed to
+`sites.ecmwf.int/pad/liaise/gauges/`.
 
 ## Q100 across all three routing resolutions — DONE 2026-09-17
 
