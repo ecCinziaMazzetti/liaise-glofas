@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract GRDC-sourced river-gauge observations on the LIAISE (Ebro) network.
+"""Extract river-gauge observations on the LIAISE (Ebro) network.
 
 Companion to the Fortran-vs-CaMa-Flood-GPU discharge comparison documented in
 CLAUDE.md ("GPU-vs-Fortran discharge comparison") -- that comparison checked
@@ -18,13 +18,29 @@ is):
     /perm/pad/flood_cases/Stations/Qobs_24_1980-2025_withcaravan.zarr):
     daily discharge per station, keyed by `statid` (matches the CSV's `Id`).
 
-Why GRDC-only, and why basin-filtered:
-  - GRDC (Global Runoff Data Centre) stations are the ones ifs-riverbench's
-    own `prepare_public_bundle.py` already treats as safe to redistribute
-    (public-domain, via the Caravan/GRDC-Caravan extension) -- identified the
-    same way here: Source=="Caravan" and Provid starting with "GRDC_".
+Provider sources and basin filtering:
+  - `--providers` selects which Caravan sub-datasets to pull, matched against
+    the CSV's `Provid` prefix (case-insensitive, before the first `_`).
+    Default is `GRDC` only, matching the original (2026-09-12) extraction.
+    Passing `--providers GRDC camelses` additionally pulls CAMELS-Spain
+    stations (the CAMELS sub-dataset relevant to the Ebro basin -- other
+    CAMELS regions, e.g. camelsde/camelsch/camelscl, do not overlap this
+    domain and are filtered out by the basin match below regardless).
+  - **Licensing differs by provider -- this matters for redistribution, not
+    for internal use.** GRDC (Global Runoff Data Centre) stations are the
+    ones ifs-riverbench's own `prepare_public_bundle.py` treats as safe to
+    redistribute (public-domain, via the open-access GRDC-Caravan extension
+    of Caravan). CAMELS-Spain and every other non-GRDC Caravan sub-dataset
+    "carry their own separate licences" (that script's own docstring) --
+    typically CC-BY-style attribution licences, not public-domain, and
+    `prepare_public_bundle.py` explicitly excludes them from public bundles,
+    replacing their obs payload with a `{"restricted": true}` marker. This
+    script's own output is for internal ECMWF analysis (this repo has no
+    public-redistribution requirement), but do not feed a CAMELS-inclusive
+    output file into a public-facing pipeline (e.g. ifs-riverbench's own
+    bundle) without re-checking that script's filter.
   - A lat/lon bounding box alone is NOT enough to select "LIAISE-relevant"
-    stations: several GRDC stations that fall inside a naive Ebro-region box
+    stations: several stations that fall inside a naive Ebro-region box
     are actually on entirely separate river systems (Tagus, Turia, Jucar,
     Llobregat, Ter, Bidasoa all have gauges in the same rectangle). This
     script instead matches each station's Cama15lon/Cama15lat cell against
@@ -46,6 +62,14 @@ Usage
         --ncdata data/ncdata.nc \\
         --start-date 1988-01-01 --end-date 2014-12-31 \\
         --out liaise_grdc_observations.nc
+
+    # GRDC + CAMELS-Spain, internal-analysis output (not redistributed):
+    python3 extract_liaise_grdc_observations.py --providers GRDC camelses \\
+        --station-csv /perm/pad/flood_cases/Stations/allstations_v1.3.csv \\
+        --qobs /perm/pad/flood_cases/Stations/Qobs_24_1980-2025_withcaravan.zarr \\
+        --ncdata data/ncdata.nc \\
+        --start-date 1988-01-01 --end-date 2014-12-31 \\
+        --out liaise_river_observations_grdc_camels.nc
 """
 
 from __future__ import annotations
@@ -70,10 +94,46 @@ def get_args() -> argparse.Namespace:
     p.add_argument("--lon-window", nargs=2, type=float, default=[-2.5, 3.0], metavar=("WEST", "EAST"),
                     help="coarse pre-filter box, only to limit the CSV scan -- the real filter is the basin match")
     p.add_argument("--lat-window", nargs=2, type=float, default=[39.0, 43.5], metavar=("SOUTH", "NORTH"))
+    p.add_argument("--providers", nargs="+", default=["GRDC"],
+                    help="Provid prefixes to keep (case-insensitive, matched before the first '_'), "
+                         "e.g. 'GRDC camelses'. Default: GRDC only (public-domain, matches the original "
+                         "2026-09-12 extraction). See the licensing note in this script's docstring "
+                         "before adding non-GRDC providers to anything meant for redistribution.")
     p.add_argument("--start-date", default="1980-01-01")
     p.add_argument("--end-date", default="2025-12-31")
+    p.add_argument("--caravan-timeseries-dir", type=Path, default=None,
+                    help="raw per-station Caravan archive (ifs-riverbench convention: "
+                         "netcdf_V1.1/<provider>/<provid>.nc, e.g. netcdf_V1.1/camelses/camelses_9002.nc), "
+                         "used as a FALLBACK when a station's merged --qobs series is all-NaN. Needed for "
+                         "camelses (CAMELS-Spain): as of this writing, "
+                         "Qobs_24_1980-2025_withcaravan.zarr carries camelses station IDs but essentially "
+                         "no populated discharge for them (checked: 266/269 stations entirely NaN, the "
+                         "other 3 have exactly 1 valid day) -- a gap in that merged archive, not in the "
+                         "underlying data, which exists in the raw per-station files as 'streamflow', "
+                         "units mm/d (Caravan's area-normalized convention), converted here to m3/s using "
+                         "the station's ProvArea (km2) from --station-csv.")
     p.add_argument("--out", required=True, type=Path, help="output NetCDF: station metadata + observed discharge")
     return p.parse_args()
+
+
+def load_caravan_fallback(path: Path, area_km2: float, dates: np.ndarray) -> np.ndarray | None:
+    """Read raw per-station Caravan streamflow (mm/d) and convert to m3/s on the given daily `dates`."""
+    if not path.exists() or not area_km2:
+        return None
+    raw = xr.open_dataset(path)
+    if "streamflow" not in raw.variables:
+        return None
+    q_mm_day = raw["streamflow"].values.astype("float64")
+    # Q[m3/s] = depth[mm/d] * area[km2] * 1000[m3/mm/km2] / 86400[s/d] = depth * area / 86.4
+    q_m3s = q_mm_day * area_km2 / 86.4
+    raw_dates = raw["date"].values.astype("datetime64[D]")
+    out = np.full(len(dates), np.nan, dtype="float64")
+    pos = {d: i for i, d in enumerate(raw_dates)}
+    for i, d in enumerate(dates.astype("datetime64[D]")):
+        j = pos.get(d)
+        if j is not None:
+            out[i] = q_m3s[j]
+    return out
 
 
 def find_grdc_liaise_stations(opts: argparse.Namespace) -> list[dict]:
@@ -91,6 +151,7 @@ def find_grdc_liaise_stations(opts: argparse.Namespace) -> list[dict]:
 
     lonW, lonE = opts.lon_window
     latS, latN = opts.lat_window
+    providers = {p.lower() for p in opts.providers}
     stations = []
     with open(opts.station_csv, newline="", encoding="utf-8", errors="replace") as fh:
         for row in csv.DictReader(fh):
@@ -100,7 +161,9 @@ def find_grdc_liaise_stations(opts: argparse.Namespace) -> list[dict]:
                 continue
             if not (lonW <= slon <= lonE and latS <= slat <= latN):
                 continue
-            if not (row.get("Source") == "Caravan" and row.get("Provid", "").startswith("GRDC_")):
+            provid = row.get("Provid", "")
+            provider = provid.split("_")[0].lower() if provid else ""
+            if not (row.get("Source") == "Caravan" and provider in providers):
                 continue
             try:
                 clat, clon = float(row["Cama15lat"]), float(row["Cama15lon"])
@@ -112,7 +175,7 @@ def find_grdc_liaise_stations(opts: argparse.Namespace) -> list[dict]:
             if np.ma.is_masked(cell_basin) or cell_basin != liaise_basin_id:
                 continue
             stations.append({
-                "id": row["Id"], "name": row["Name"].strip(), "provid": row["Provid"],
+                "id": row["Id"], "name": row["Name"].strip(), "provid": row["Provid"], "provider": provider,
                 "station_lat": slat, "station_lon": slon,
                 "cama15_lat": clat, "cama15_lon": clon,
                 "cama15_iy": iy, "cama15_ix": ix,
@@ -125,9 +188,11 @@ def main() -> None:
     opts = get_args()
     stations = find_grdc_liaise_stations(opts)
     if not stations:
-        raise SystemExit("No GRDC stations matched the LIAISE domain's basin -- check --ncdata/--liaise-cell.")
+        raise SystemExit(f"No stations from {opts.providers} matched the LIAISE domain's basin -- "
+                          "check --ncdata/--liaise-cell/--providers.")
 
-    print(f"Found {len(stations)} GRDC-sourced gauges on the LIAISE (Ebro) network:")
+    print(f"Found {len(stations)} gauge(s) from {sorted({s['provider'] for s in stations})} "
+          "on the LIAISE (Ebro) network:")
     for s in stations:
         print(f"  {s['provid']:15s} {s['name']:35s} area={s['provider_area_km2']:>10} km2"
               f"  cell=({s['cama15_lat']:.3f},{s['cama15_lon']:.3f})")
@@ -149,6 +214,22 @@ def main() -> None:
     discharge = ds["discharge"].isel(station=station_positions).values  # (time, station)
     time = ds["time"].values
 
+    if opts.caravan_timeseries_dir:
+        n_fallback = 0
+        for i, s in enumerate(stations):
+            col = discharge[:, i]
+            if np.sum(np.isfinite(col)) >= 30:
+                continue  # merged archive already has usable data for this station
+            area = float(s["provider_area_km2"]) if s["provider_area_km2"] else 0.0
+            raw_path = opts.caravan_timeseries_dir / s["provider"] / f"{s['provid']}.nc"
+            fallback = load_caravan_fallback(raw_path, area, time)
+            if fallback is not None and np.sum(np.isfinite(fallback)) >= 30:
+                discharge[:, i] = fallback
+                n_fallback += 1
+        if n_fallback:
+            print(f"Filled {n_fallback} station(s) from the raw Caravan archive "
+                  f"({opts.caravan_timeseries_dir}) -- merged --qobs had no usable series for them.")
+
     opts.out.parent.mkdir(parents=True, exist_ok=True)
     with Dataset(opts.out, "w", format="NETCDF4") as out:
         out.createDimension("station", len(stations))
@@ -166,6 +247,10 @@ def main() -> None:
         v = out.createVariable("station_name", str, ("station",))
         for i, s in enumerate(stations):
             v[i] = s["name"]
+        v = out.createVariable("provider", str, ("station",))
+        v.long_name = "Caravan sub-dataset (Provid prefix): GRDC=public-domain, others carry their own licence"
+        for i, s in enumerate(stations):
+            v[i] = s["provider"]
 
         for key, ncname, units in [
             ("station_lat", "station_lat", "degrees_north"),
@@ -186,14 +271,18 @@ def main() -> None:
 
         v = out.createVariable("discharge", "f4", ("time", "station"), fill_value=1.0e20)
         v.units = "m3 s-1"
-        v.long_name = "observed daily discharge (GRDC via Caravan)"
+        v.long_name = ("observed daily discharge (via Caravan; see 'provider' for the sub-dataset/licence). "
+                        "Non-GRDC values sourced from the raw per-station archive and converted from the "
+                        "Caravan mm/d convention to m3/s using each station's ProvArea where the merged "
+                        "--qobs series had no usable data -- see load_caravan_fallback().")
         v[:] = discharge
 
         out.history = (
-            "Filtered from ifs-riverbench station metadata + Qobs archive: "
-            "Source=Caravan, Provid startswith GRDC_, basin-matched to the LIAISE "
-            "(Ebro) network in cama_flood/data/ncdata.nc. See "
-            "cama_flood/extract_liaise_grdc_observations.py."
+            f"Filtered from ifs-riverbench station metadata + Qobs archive: Source=Caravan, "
+            f"Provid prefix in {sorted({p.lower() for p in opts.providers})}, basin-matched to the LIAISE (Ebro) network in "
+            "cama_flood/data/ncdata.nc. See cama_flood/extract_liaise_grdc_observations.py. "
+            "Non-GRDC providers carry their own licence -- see this script's docstring before "
+            "redistributing this file outside internal ECMWF use."
         )
 
     print(f"\nSaved {len(stations)} stations x {len(time)} days to {opts.out}")

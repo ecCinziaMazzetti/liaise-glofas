@@ -81,10 +81,32 @@ CMF_NAMELIST_RUN_NAME=${CMF_NAMELIST_RUN_NAME:-input_cmf.nam}
 CMF_RESTART_IN_NAME=${CMF_RESTART_IN_NAME:-restartin_cmf.nc}
 # Files referenced by namelist/input_cmf's NMAP/NDIMTIME/NFORCE blocks;
 # already named to match what CaMa-Flood expects at runtime.
-CMF_STATIC_FILES=(inpmat.nc rivpar.nc rivclim.nc mpireg.nc bifprm.txt diminfo.txt)
+CMF_STATIC_FILES=(inpmat.nc rivpar.nc rivclim.nc mpireg.nc bifprm.txt diminfo.txt ${CMF_STATIC_FILES_EXTRA:-})  # extra files (e.g. dam_param.csv) via env var, staged from CMF_STATIC_DIR like the rest
 
 # Optional OpenMP settings
-export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
+# Thread count. Measured 2026-09-17 on the LIAISE domain, 3 identical years each:
+#
+#   glb_15min (1,405 river cells):  1 thread 168 s/yr | 4 threads 274 s/yr  -> 1.6x SLOWER
+#   glb_03min (34,137 river cells): 1 thread ~36 min/yr | 4 threads ~2x faster
+#
+# So threading is NOT a universal win: at the coarse resolution the OpenMP regions are
+# too small to pay back their synchronisation cost, and only the fine resolutions
+# benefit. Default is therefore 1 -- which is also what every validated run in this
+# repo actually used -- and finer resolutions opt in with OMP_THREADS=4.
+#
+# Do NOT write ${OMP_NUM_THREADS:-...} here: ECMWF's shell profile exports
+# OMP_NUM_THREADS=1 and `sbatch --export=ALL` propagates it, so `:-` never fires and the
+# setting silently becomes whatever the submitting shell had. That hid the single-
+# threading above for the entire project until it was caught by inspecting a live
+# process. The value is echoed at startup so this cannot regress unnoticed.
+#
+# Threading is not bit-reproducible despite LBITSAFE=.TRUE. (1% of cell-times differ),
+# but the differences are confined to already-unstable estuary/bifurcation cells with
+# near-zero or negative discharge: median difference 4e-4 m3/s, and gauge skill scores
+# are identical to 4 decimal places. Mixing thread counts across years of one run is
+# therefore acceptable, if untidy.
+export OMP_NUM_THREADS=${OMP_THREADS:-1}
+echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (OMP_THREADS=${OMP_THREADS:-unset})"
 export OMP_STACKSIZE=${OMP_STACKSIZE:-512M}
 
 # -------------------------
@@ -256,6 +278,29 @@ fi
 IFS=$'\n' forcing_files=($(printf '%s\n' "${forcing_files[@]}" | sort))
 unset IFS
 
+# START_YEAR/END_YEAR: restrict the annual loop to a sub-range, for resuming
+# a run that was interrupted partway through without redoing already-
+# completed years. Pair with INITIAL_RESTART(_CMF) pointing at the last
+# completed year's restart so the resumed run continues the same chain
+# rather than cold-starting. Both default to unrestricted (all years found),
+# so this changes nothing for a normal from-scratch run.
+if [[ -n "${START_YEAR:-}" || -n "${END_YEAR:-}" ]]; then
+    filtered=()
+    for f in "${forcing_files[@]}"; do
+        b=$(basename "$f")
+        [[ "$b" =~ ^WFDE5_CRU_GPCC_([0-9]{4})_ecland\.nc$ ]] || continue
+        y="${BASH_REMATCH[1]}"
+        (( y >= ${START_YEAR:-0} )) || continue
+        (( y <= ${END_YEAR:-9999} )) || continue
+        filtered+=("$f")
+    done
+    forcing_files=("${filtered[@]}")
+    if (( ${#forcing_files[@]} == 0 )); then
+        echo "ERROR: START_YEAR/END_YEAR filter (${START_YEAR:-<none>}-${END_YEAR:-<none>}) matched no forcing files" >&2
+        exit 1
+    fi
+fi
+
 echo "Found ${#forcing_files[@]} annual forcing files:"
 printf '  %s\n' "${forcing_files[@]}"
 
@@ -304,10 +349,17 @@ for forcing_file in "${forcing_files[@]}"; do
         ln -sf "$SOILINIT_SOURCE" "$SOILINIT_RUN_NAME"
         echo "Initial state: $SOILINIT_SOURCE"
     else
-        cp -f "$previous_restart" "$RESTART_IN_NAME"
-        ln -sf "$SOILINIT_SOURCE" "$SOILINIT_RUN_NAME"
-        sed_inplace -e 's/^([[:space:]]*LNF[[:space:]]*=).*/\1 .FALSE./' "$NAMELIST_RUN_NAME"
-        echo "Restart input: $previous_restart -> $RESTART_IN_NAME"
+        # Continue from the previous year's restart by using it AS the
+        # initial-state file, exactly as ecland_run_model.sh's RLOOP does
+        # (restartout.nc is a superset of soilinit: same fields, SoilMoist in
+        # kg m-2 which RDSUPR converts, all NCSNEC snow layers, WTD, ...).
+        # Do NOT use restartin.nc + LNF=.FALSE. for this: the driver only
+        # calls RDRES when NSTART /= 0, and this script always starts each
+        # year at NSTART=0, so that path silently cold-started every year
+        # from SOILINIT_SOURCE (found 2026-09-16: 37 years of "chained"
+        # runs had identical 1 January states).
+        ln -sf "$previous_restart" "$SOILINIT_RUN_NAME"
+        echo "Initial state (restart chain): $previous_restart -> $SOILINIT_RUN_NAME"
     fi
 
     if [[ "$RUN_CMF" == "true" ]]; then

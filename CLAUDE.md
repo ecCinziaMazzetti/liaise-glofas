@@ -1596,6 +1596,185 @@ alongside this run; `sbatch` fails outright (not just a wrong path) if
 that directory doesn't exist, so this would have blocked any future
 submission of this exact script, not just looked wrong in retrospect.
 
+### 37-year ecLand–CaMa-Flood coupled run, 1988-2024: validated (2026-09-16)
+
+The first valid multi-year coupled run (the earlier 1988-2014 one predates the
+`cnt41s.F90`/domain fixes and is invalid, see "Validated so far" above).
+`namelist/input_cmf1way` (= `namelist/input` with `LECMF1WAY=true`,
+`TCOUPFREQ=1`, `CNMEXP="liaise_wfde5_cmf"`), CaMa-Flood side
+`namelist/input_cmf` (bifurcation on, `LDAMOUT=.FALSE.`, 6-hourly output),
+executable = the Sep-13 control pin `run/bin/ecland-master-dp_pinned_20260913`
+(so the land physics is the control's; 1-way coupling means the land state is
+the control run's, year for year), cold start 1988, restart-chained (land and
+CaMa-Flood) to 2024. `sbatch` job `37620761`, `qos=nf`, 4 threads, 32 GB:
+**37/37 years, status 0, 1 h 47 min wall-clock (~2.9 min/year)**. Output
+outside the repo at `/perm/pad/liaise_cmf_1988_2024/{output,restart,work,logs}`
+(72 GB; per year `o_totout.nc` 6-hourly on the 73x49 CaMa-Flood grid, 1405
+active cells, 1e20 fill, plus `o_rivsto/o_fldsto/o_fldfrc/o_gwsto/o_wevap`,
+`log_CaMa.txt`, `restart_cmf_<year>1231.nc`). Sanity per sampled year:
+domain-mean discharge 35-49 m3/s, peaks 6-9 x 10^3 m3/s (Rhone-scale), 0.35-0.44 %
+negative values (the documented delta/bifurcation signature). This is the
+naturalised (no-reservoir) baseline the CaMa-Flood v4.2 reservoir-operation
+scripts need (annual mean/max and 100-year discharge per dam cell) -- see the
+"Ebro Reservoir Operation" feasibility artifact.
+
+**Two-chains discharge benchmark** (`cama_flood/skill_benchmark_chains.py`,
+`build_chain_dashboard.py`): this chain vs the eclandpy -> CaMa-Flood-GPU chain
+(`eclandpy_bridge/cmfgpu_out_gpu_repro/`, same network, eclandpy runoff -21 %
+vs the Fortran control) against the 7 GRDC gauges over every gauged year,
+1988-2014 = 133 station-years excluding regulated Caspe. Fortran `totout` is
+averaged to daily means before matching (the 5-year benchmark files were
+daily). Result: GPU chain ahead on KGE in 80/133 (median KGE -0.179 vs
+-0.233, median r 0.394 vs 0.359), Fortran chain closer on volume (median PBIAS
+-37.9 % vs -52.3 %, the runoff deficit showing through); per gauge the GPU
+chain wins the larger Pyrenean catchments (Cinca-Fraga 21/23, Fortanete 19/22,
+Lafortunada 6/7), Fortran the small dry tributaries (Vero 19/27, Arba 14/27,
+Jiloca 14/27); both under-predict everywhere. JSON:
+`/perm/pad/liaise_discharge_compare/skill_benchmark_chains.json` (320 rows).
+Page: `sites.ecmwf.int/pad/liaise/chains/` and
+`https://claude.ai/artifact/GRAU87yGFPz2P5rotyUq1R` ("Two Chains on the
+Ebro", the "LIAISE Correction" design re-pointed at the 37-year runs).
+
+### The annual restart chain never carried the land state -- fixed (2026-09-16)
+
+**Every multi-year run made with `run/run_liaise_ecland.{sh,slurm}` before
+2026-09-16 cold-started the LAND every 1 January from `soilinit`**, including
+the 37-year CY50R1 control run above and the "final" pass of the 2-pass
+Fortran spin-ups in the GRDC benchmark (only CaMa-Flood's own river restart
+was ever chained). The scripts staged the previous year's restart as
+`restart_in.nc` and set `LNF=.FALSE.`, but the offline driver only calls
+`RDRES` (which opens the fixed name `restartin.nc`) when `NSTART /= 0`
+(`suinif1s.F90`), and `patch_namelist_for_year` always sets `NSTART=0` --
+so the restart was silently ignored and `soilinit` read instead, with no
+message. Verified, not inferred: in every year of the affected runs the
+first-hour `o_gg.nc` state (`SoilMoist` all layers, `SWE`, `AvgSurfT`) equals
+`soilinit` to 0.000 in all 235 cells and differs from the previous
+December's restart by up to 263 kg m-2 of soil water and 96 kg m-2 of SWE.
+
+How it was found: a spurious runoff pulse in the first hour of *every*
+year (domain mean 0.24 mm h-1 against 0.005 before and 0.045 after),
+traced to one `soilinit` cell (43.25N, -5.75E, the north-west corner;
+Cantabrian coast, CaMa basin 14, outside the Ebro) whose initial soil
+moisture (0.44-0.47 m3 m-3) exceeds the medium-soil saturation (0.439),
+so it dumps ~50 mm of sub-surface runoff at each "start" -- and CaMa-Flood
+routed that into 1-January peaks of thousands of m3/s downstream of it.
+That cell still needs its `soilinit` value capped at saturation
+(`init_clim`), but it only mattered because of the yearly cold start.
+
+**Fix**: both drivers now do what the reference `ecland_run_model.sh`
+`RLOOP` does -- link the previous year's `restartout.nc` **as `soilinit`**
+(`restartout.nc` is a superset of `soilinit`: `SoilMoist` in kg m-2, which
+`RDSUPR` converts, all `NCSNEC` snow layers, `WTD`, ...) and start the year
+normally (`NSTART=0`, `LNF=.TRUE.`). `INITIAL_RESTART` works the same way,
+so the spin-up path is repaired too. Proof (2-year 1988-1989 coupled test,
+`/ec/res4/scratch/pad/liaise_chain_test`): 1 January 1989 equals the 1988
+restart to 0.0000 in every variable, the runoff pulse is gone, and
+domain-mean discharge is continuous across the boundary (8.9 -> 9.1 m3/s).
+
+Consequences to keep in mind: the control-run diagnostics above are of 37
+independent one-year cold starts (the T2m trend and precipitation are
+forcing-driven and stand; soil-moisture memory, snow carry-over and
+anything sensitive to spin-up do not); the GRDC benchmark's Fortran side
+had no land spin-up (its CaMa-Flood storage spin-up did work); the first
+37-year coupled run of 2026-09-16 (`/perm/pad/liaise_cmf_1988_2024_NOCHAIN_invalid`,
+1 h 48 min, all years status 0) is superseded by the rerun launched with the
+fixed driver into `/perm/pad/liaise_cmf_1988_2024`.
+
+#### 37-year ecLand-CaMa-Flood run, restart chain verified (2026-09-16)
+
+`/perm/pad/liaise_cmf_1988_2024/` (job `37653123`, 1 h 56 min, 36 GB): the
+Sep-13 pinned control binary with `namelist/input_cmf1way` (= `namelist/input`
+with `LECMF1WAY=true`, `TCOUPFREQ=1` as in the five benchmark years,
+`CNMEXP="liaise_wfde5_cmf"`), `cama_flood/data/` statics, 1988 cold start,
+both restarts chained through 2024, 37/37 years status 0. Verified at all 36
+year boundaries: first-hour `SoilMoist` (4 layers), `SWEML` (5 layers) and
+`AvgSurfT` equal the previous December's restart to 0.000; domain-mean
+discharge changes by a median 8 % across the boundary (weather, not a
+reset); 1-way coupling means the land output is bit-identical to what the
+control run would give with the same chain, so this run is also the valid
+land control now. Routed discharge: 37-year domain mean 24.4 m3/s, peak
+14 814 m3/s (December 2003, Rhone), negative-value fraction 0.30 %, wettest
+year 1988, driest 2023. Against the cold-start run the chain lowers
+Jan-Mar discharge by a factor 1.5-4 and annual means by 15-45 % -- the
+missing land memory was not a small effect.
+
+Two quirks documented for the record: (a) the restart file's 2-D `SWE`
+field is the *top snow layer only* (`wrtres.F90` packs layer 1), while
+`SWEML` is complete and is what `RDSUPR` reads when `nlevsn` matches
+`NCSNEC` -- so `restart SWE /= sum(SWEML)` is expected, not a chain break;
+(b) `o_totout.nc` uses `1e20` as its fill value and `IFRQ_OUT=6` -- mask
+`>1e19` and aggregate to daily before feeding the reservoir scripts.
+
+### Two dashboard artifacts were stale after the restart-chain fix -- caught by a colleague's review, regenerated (2026-09-17)
+
+A colleague (Cinzia)'s own agent, reviewing this repo independently, flagged
+what looked like a regression: the current on-disk control run's namelist
+shows `LNF=.TRUE.` untouched (raw template, no `sed` patch) in every year,
+and its domain-mean runoff differs sharply from `control_run_diagnostics.json`
+(e.g. 1989: -102.5 vs -169.3 mm). Their conclusion -- that the restart-chain
+fix "never fired" and the correct mechanism is `LNF=.FALSE.` + `restart_in.nc`
+-- is **wrong**, but the underlying observation (numbers don't match a
+committed artifact) was real and caught two genuinely stale files. Verified
+independently before touching anything:
+
+- **The current control run's restart chain is correct.** Compared job
+  `37712110`'s (2026-09-16, 19:45-21:41) own `restart/1988/restart_19881231.nc`
+  against `output/1989/o_gg.nc`'s first hour directly: `SoilMoist`, `SWEML`,
+  `AvgSurfT` all match to float32 precision (~1e-5 to 1e-7 absolute), exactly
+  the boundary-continuity check the original fix (`4f0ad4e`) used. `LNF=.TRUE.`
+  every year is the *intended* post-fix design, not a sign the patch failed:
+  the fix deliberately stopped using `LNF=.FALSE.`/`restart_in.nc` (the
+  mechanism that turned out to be silently ignored, since `NSTART` is always
+  0) in favour of linking the previous year's `restartout.nc` directly as
+  `soilinit` and leaving `LNF` at its raw template value. A reviewer expecting
+  the old convention will see "untouched template" and reasonably suspect the
+  patch didn't run -- it's worth stating this plainly so the confusion doesn't
+  recur.
+- **`control_run_diagnostics.json` (mtime Sep 13, 21:36) was genuinely stale**
+  -- it's the pre-fix, cold-start-every-year run, exactly as this file's own
+  restart-chain-fix section already said ("the control-run diagnostics above
+  are of 37 independent one-year cold starts"). The runoff difference is the
+  fix working as intended (removing a spurious cold-start runoff pulse lowers
+  annual totals 15-45%, as already documented), not a new bug. Regenerated
+  via `run/extract_control_diagnostics.py` against the current, chain-verified
+  `run/output/` (gitignored, on-disk only) and rewritten to
+  `/perm/pad/liaise_discharge_compare/control_run_diagnostics.json`
+  (outside the repo, per convention). The `sites.ecmwf.int/pad/liaise/control/`
+  page itself is a static HTML snapshot with no generator script found in this
+  repo (likely built ad hoc in an earlier session) -- **it was not rebuilt and
+  still shows the stale numbers**; regenerate it before trusting that page.
+- **`skill_benchmark_chains.json` (mtime Sep 16, 15:27) was also stale** --
+  written *during* job `37620761`'s run (14:08-15:56), i.e. before even the
+  first (pre-fix) coupled rerun finished, so it predates the restart-chain fix
+  entirely. Rerun against the corrected `/perm/pad/liaise_cmf_1988_2024`
+  output (the path `skill_benchmark_chains.py` already points at by default,
+  so no path change was needed -- job `37653123` had already overwritten it in
+  place): Fortran chain's median PBIAS moved from -37.9% to **-52.3%** (now
+  matching the GPU chain's -52.3% almost exactly -- a coincidence confirmed
+  real by checking individual station-year rows differ, not a duplicate-data
+  bug), GPU's KGE win rate dropped from 80/133 to **65/133**. Direction makes
+  physical sense: the fix *removes* an artificial cold-start runoff pulse, so
+  a chain that already under-predicted volume (negative PBIAS) under-predicts
+  more once the artifact is gone. Redeployed to
+  `sites.ecmwf.int/pad/liaise/chains/` via `sitesctl`; verified the deployed
+  page no longer contains the old aggregate figures.
+- **One claim in the colleague's review was a misread, not just a different
+  model**: "-52.3%" was described as "pad's re-run"'s PBIAS, quoted from this
+  same two-chains table -- but -52.3% there was always the **GPU/eclandpy
+  chain's** own PBIAS (a separate model, unaffected by this bug), not a second
+  Fortran number. Coincidentally, after the fix, Fortran's own corrected PBIAS
+  also happens to be -52.3% -- worth flagging clearly when relaying this back,
+  since it reads as confirmation of the original (wrong) claim if not
+  explained.
+
+**Lesson for future review exchanges across repos/agents**: an external
+review that finds a real anomaly (numbers don't match a committed file) can
+still misdiagnose the cause if it doesn't have the latest `CLAUDE.md`/commit
+history -- verify the anomaly independently (state-continuity check, file
+mtimes vs. job timestamps) before accepting either side's explanation, and
+check whether the "reference" artifact being compared against is itself the
+stale one.
+
 ### Pinned binaries: the executable's RPATH is `$ORIGIN/../lib64` (2026-09-16)
 
 `ecland-master-dp` finds its own `libecland_surf_dp.so`/`libfiat.so`/... via
