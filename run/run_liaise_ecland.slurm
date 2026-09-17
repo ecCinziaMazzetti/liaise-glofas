@@ -100,7 +100,14 @@ module load hpcx-openmpi/2.9.0
 module load netcdf4
 
 # Optional OpenMP settings
-export OMP_NUM_THREADS=${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-4}}
+# Thread count: the SLURM allocation is authoritative. Do NOT fall back to an
+# inherited OMP_NUM_THREADS -- ECMWF's own shell profile exports OMP_NUM_THREADS=1,
+# and `sbatch --export=ALL` propagates it, so `${OMP_NUM_THREADS:-...}` silently
+# pinned every run to a single thread regardless of --cpus-per-task. That cost ~2x
+# on the glb_03min run before it was spotted (2026-09-17). Deliberate overrides go
+# through OMP_THREADS instead, and the choice is echoed so a regression is visible.
+export OMP_NUM_THREADS=${OMP_THREADS:-${SLURM_CPUS_PER_TASK:-4}}
+echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (cpus-per-task=${SLURM_CPUS_PER_TASK:-unset}, OMP_THREADS=${OMP_THREADS:-unset})"
 export OMP_STACKSIZE=${OMP_STACKSIZE:-512M}
 
 # -------------------------
