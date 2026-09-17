@@ -1812,6 +1812,16 @@ initialising it on snow-free points, and `run/check_water_budget.py` returns
 absurd totals on this domain's output (it does not mask sea/missing points
 despite its docstring) -- neither affects the runs documented here.
 
+## Scientific context / literature
+
+`docs/literature.md` — papers relevant to this project, each with the specific
+diagnostics worth replicating here and what we already have to do it with.
+Currently: Polcher et al. (2026, QJRMS, doi:10.1002/qj.70229) on km-scale
+land-surface model evaluation over the Pyrenean catchments (includes the Ebro),
+whose central conclusion — that missing lateral water redistribution makes LSMs
+under-evaporate at km-scale — our 2-way CaMa-Flood coupling result (+19.5%
+`EWater`) speaks to directly.
+
 ## Coding guidelines
 
 - Preserve scientific logic unless explicitly asked to change it.
