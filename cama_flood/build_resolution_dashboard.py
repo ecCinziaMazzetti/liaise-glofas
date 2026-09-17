@@ -393,12 +393,22 @@ const CAVEAT_NAMES = __CAVEATS_JSON__;
 // for KGE is NOT 0 -- it is 1 - sqrt(2) ~= -0.41 (Knoben et al. 2019, HESS) -- so
 // labelling KGE > 0 as "beats the mean-flow benchmark" would be wrong. KGE > 0 is
 // reported here as its own, stricter and commonly used, bar.
+// `test` gets (value, station, experiment, year) so a metric can be judged on a
+// companion quantity where its own units have no sensible fixed bar -- see `bias`.
 const METRIC_STATS = {
   kge:   { test: v => v > 0,             label: 'gauges with KGE &gt; 0' },
-  nse:   { test: v => v > 0,             label: 'gauges beating climatology (NSE &gt; 0)' },
+  nse:   { test: v => v > 0,             label: 'gauges with NSE &gt; 0' },
   r:     { test: v => v > 0.5,           label: 'gauges with r &gt; 0.5' },
-  pbias: { test: v => Math.abs(v) <= 25, label: 'gauges within &plusmn;25% volume' },
-  bias:  { test: v => v > 0,             label: 'gauges over-predicting (bias &gt; 0)' },
+  pbias: { test: v => Math.abs(v) <= 25, label: 'gauges within &plusmn;25% of observed volume' },
+  // Bias is absolute m3/s and spans orders of magnitude across these gauges, so it has
+  // no meaningful fixed threshold of its own. Judged on the same quantity expressed as a
+  // fraction of observed flow -- which is exactly PBIAS -- at a looser bar than the PBIAS
+  // tile, giving a strict (25%) and a ballpark (50%) reference rather than new information.
+  bias:  { test: (v, s, exp, year) => {
+             const pb = valueFor(s, exp, 'pbias', year);
+             return pb !== null && pb !== undefined && !Number.isNaN(pb) && Math.abs(pb) <= 50;
+           },
+           label: 'gauges within &plusmn;50% of observed volume' },
 };
 
 let currentExp = EXPERIMENTS[0];
@@ -455,18 +465,19 @@ function renderStats() {
   // Computed here rather than baked in at build time, so every tile follows the metric
   // and year selectors instead of being stuck on all-year KGE.
   const m = metricDef(currentMetric), spec = METRIC_STATS[currentMetric];
-  const vals = [];
+  const entries = [];
   STATIONS.forEach(s => {
     if (s.caveat || !s.exp[currentExp]) return;
     const v = valueFor(s, currentExp, currentMetric, currentYear);
-    if (v !== null && v !== undefined && !Number.isNaN(v)) vals.push(v);
+    if (v !== null && v !== undefined && !Number.isNaN(v)) entries.push([v, s]);
   });
+  const vals = entries.map(e => e[0]);
   const sorted = [...vals].sort((a, b) => a - b);
   const med = sorted.length
     ? (sorted.length % 2 ? sorted[(sorted.length - 1) / 2]
                          : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
     : null;
-  const passing = vals.filter(spec.test).length;
+  const passing = entries.filter(([v, s]) => spec.test(v, s, currentExp, currentYear)).length;
   const yearLbl = currentYear === 'all' ? `${h.year_min}–${h.year_max}` : currentYear;
   document.getElementById('stats').innerHTML = `
     <div class="stat"><div class="num tnum">${currentExp}</div><div class="lbl">__EXPNOUN_LOWER__</div></div>
@@ -703,10 +714,12 @@ footer = ((args.intro_html or default_intro) +
     "flow\" test; the equivalent bar for KGE is <i>not</i> 0 but 1&nbsp;&minus;&nbsp;&radic;2 "
     "&asymp; &minus;0.41 (Knoben et al. 2019), so KGE&nbsp;&gt;&nbsp;0 is reported as its own, "
     "stricter bar rather than being mislabelled as the mean-flow benchmark. Correlation uses "
-    "r&nbsp;&gt;&nbsp;0.5, PBIAS uses &plusmn;25% of observed volume, and Bias — being an "
-    "absolute m³/s quantity that spans orders of magnitude between the Ebro main stem and a "
-    "100&nbsp;km² headwater — has no meaningful fixed threshold, so it reports the "
-    "over-predicting count instead. The median tile follows the selected metric and year.</p>"
+    "r&nbsp;&gt;&nbsp;0.5 and PBIAS uses &plusmn;25% of observed volume. Bias is an absolute "
+    "m³/s quantity spanning orders of magnitude between the Ebro main stem and a "
+    "100&nbsp;km² headwater, so it has no meaningful fixed bar of its own; its tile judges "
+    "the same quantity as a fraction of observed flow — which is exactly PBIAS — at a looser "
+    "&plusmn;50%, so the two tiles give a strict and a ballpark reference rather than "
+    "independent information. The median tile follows the selected metric and year.</p>"
     "<p>Method: <code>cama_flood/skill_benchmark_resolution.py</code> · page: "
     "<code>cama_flood/build_resolution_dashboard.py</code></p>"
 )
