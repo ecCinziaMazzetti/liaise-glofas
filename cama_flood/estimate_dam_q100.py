@@ -17,9 +17,14 @@ matches each dam's real reported catchment (`area_ori`) to a median 1.00x, zero
 dams off by more than 2x.
 
 Earlier versions of this script assumed `lat_alloc`/`lon_alloc` were snapped to
-the glb_15min grid and simply nearest-cell-matched them. **They are not snapped
-to any regular grid** (checked 2026-09-17: 0% of the 7320 global dams' coordinates
-sit at a cell centre at 1/3/6/15 arcmin), so nearest-cell matching put small
+the glb_15min grid and simply nearest-cell-matched them. They are not. Per the
+v4.20 reservoir manual (see docs/cama_flood_reservoir_methodology.md) they are
+GRanD attributes corrected by allocating on 1-min MERIT Hydro -- but the shipped
+CSV rounds them to 3 decimal places, and 1 arcmin ~ 0.01667 deg, so the rounding
+destroys exact grid alignment (checked 2026-09-17: 0% of the 7320 global dams
+land on a cell centre at 1/3/6/15 arcmin, any origin convention). They are valid
+as SEARCH SEEDS -- which is how the official allocator uses them too -- but never
+as exact grid indices. Nearest-cell matching them put small
 tributary dams on whatever large river dominates the coarse cell -- it reproduced
 the allocator's own `area_alloc` for only 3 of 45 Ebro dams, with errors up to 21x
 (Ordunte: 47 km2 real catchment, matched to a 987 km2 cell). Same class of bug as
@@ -128,6 +133,13 @@ def allocate_cell(lat, lon, basin, uparea, target_basin, dlat, dlon, area_alloc,
     Basin assignment near the Pyrenean divide is genuinely unresolvable at
     glb_15min (a 0.25 deg cell straddles it), so a few French-slope dams remain
     assigned to the Ebro there; they resolve correctly at finer resolutions.
+
+    NOTE vs. the official allocator (allocate_dam.F90): it scores candidates by
+    relative uparea error PLUS a distance penalty (err2 = err +/- 0.02*dd) on the
+    1-min hires grid. That penalty is exactly the guard against the cross-divide
+    grab this function's basin-first design works around by other means. If this
+    allocator is ever reworked, adopt the penalty rather than re-deriving a
+    substitute -- see docs/cama_flood_reservoir_methodology.md.
     """
     if not (area_alloc > 0):
         return None
