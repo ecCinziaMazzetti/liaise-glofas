@@ -1700,6 +1700,76 @@ field is the *top snow layer only* (`wrtres.F90` packs layer 1), while
 (b) `o_totout.nc` uses `1e20` as its fill value and `IFRQ_OUT=6` -- mask
 `>1e19` and aggregate to daily before feeding the reservoir scripts.
 
+### Two dashboard artifacts were stale after the restart-chain fix -- caught by a colleague's review, regenerated (2026-09-17)
+
+A colleague (Cinzia)'s own agent, reviewing this repo independently, flagged
+what looked like a regression: the current on-disk control run's namelist
+shows `LNF=.TRUE.` untouched (raw template, no `sed` patch) in every year,
+and its domain-mean runoff differs sharply from `control_run_diagnostics.json`
+(e.g. 1989: -102.5 vs -169.3 mm). Their conclusion -- that the restart-chain
+fix "never fired" and the correct mechanism is `LNF=.FALSE.` + `restart_in.nc`
+-- is **wrong**, but the underlying observation (numbers don't match a
+committed artifact) was real and caught two genuinely stale files. Verified
+independently before touching anything:
+
+- **The current control run's restart chain is correct.** Compared job
+  `37712110`'s (2026-09-16, 19:45-21:41) own `restart/1988/restart_19881231.nc`
+  against `output/1989/o_gg.nc`'s first hour directly: `SoilMoist`, `SWEML`,
+  `AvgSurfT` all match to float32 precision (~1e-5 to 1e-7 absolute), exactly
+  the boundary-continuity check the original fix (`4f0ad4e`) used. `LNF=.TRUE.`
+  every year is the *intended* post-fix design, not a sign the patch failed:
+  the fix deliberately stopped using `LNF=.FALSE.`/`restart_in.nc` (the
+  mechanism that turned out to be silently ignored, since `NSTART` is always
+  0) in favour of linking the previous year's `restartout.nc` directly as
+  `soilinit` and leaving `LNF` at its raw template value. A reviewer expecting
+  the old convention will see "untouched template" and reasonably suspect the
+  patch didn't run -- it's worth stating this plainly so the confusion doesn't
+  recur.
+- **`control_run_diagnostics.json` (mtime Sep 13, 21:36) was genuinely stale**
+  -- it's the pre-fix, cold-start-every-year run, exactly as this file's own
+  restart-chain-fix section already said ("the control-run diagnostics above
+  are of 37 independent one-year cold starts"). The runoff difference is the
+  fix working as intended (removing a spurious cold-start runoff pulse lowers
+  annual totals 15-45%, as already documented), not a new bug. Regenerated
+  via `run/extract_control_diagnostics.py` against the current, chain-verified
+  `run/output/` (gitignored, on-disk only) and rewritten to
+  `/perm/pad/liaise_discharge_compare/control_run_diagnostics.json`
+  (outside the repo, per convention). The `sites.ecmwf.int/pad/liaise/control/`
+  page itself is a static HTML snapshot with no generator script found in this
+  repo (likely built ad hoc in an earlier session) -- **it was not rebuilt and
+  still shows the stale numbers**; regenerate it before trusting that page.
+- **`skill_benchmark_chains.json` (mtime Sep 16, 15:27) was also stale** --
+  written *during* job `37620761`'s run (14:08-15:56), i.e. before even the
+  first (pre-fix) coupled rerun finished, so it predates the restart-chain fix
+  entirely. Rerun against the corrected `/perm/pad/liaise_cmf_1988_2024`
+  output (the path `skill_benchmark_chains.py` already points at by default,
+  so no path change was needed -- job `37653123` had already overwritten it in
+  place): Fortran chain's median PBIAS moved from -37.9% to **-52.3%** (now
+  matching the GPU chain's -52.3% almost exactly -- a coincidence confirmed
+  real by checking individual station-year rows differ, not a duplicate-data
+  bug), GPU's KGE win rate dropped from 80/133 to **65/133**. Direction makes
+  physical sense: the fix *removes* an artificial cold-start runoff pulse, so
+  a chain that already under-predicted volume (negative PBIAS) under-predicts
+  more once the artifact is gone. Redeployed to
+  `sites.ecmwf.int/pad/liaise/chains/` via `sitesctl`; verified the deployed
+  page no longer contains the old aggregate figures.
+- **One claim in the colleague's review was a misread, not just a different
+  model**: "-52.3%" was described as "pad's re-run"'s PBIAS, quoted from this
+  same two-chains table -- but -52.3% there was always the **GPU/eclandpy
+  chain's** own PBIAS (a separate model, unaffected by this bug), not a second
+  Fortran number. Coincidentally, after the fix, Fortran's own corrected PBIAS
+  also happens to be -52.3% -- worth flagging clearly when relaying this back,
+  since it reads as confirmation of the original (wrong) claim if not
+  explained.
+
+**Lesson for future review exchanges across repos/agents**: an external
+review that finds a real anomaly (numbers don't match a committed file) can
+still misdiagnose the cause if it doesn't have the latest `CLAUDE.md`/commit
+history -- verify the anomaly independently (state-continuity check, file
+mtimes vs. job timestamps) before accepting either side's explanation, and
+check whether the "reference" artifact being compared against is itself the
+stale one.
+
 ### Pinned binaries: the executable's RPATH is `$ORIGIN/../lib64` (2026-09-16)
 
 `ecland-master-dp` finds its own `libecland_surf_dp.so`/`libfiat.so`/... via
