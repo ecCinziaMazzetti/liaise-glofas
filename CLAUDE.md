@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+> **Fork note (mocm/liaise-glofas):** this fork's own working notes are in
+> @CLAUDE.mocm.md , and LISFLOOD-specific notes in `lisflood/CLAUDE.md`.
+> Upstream appends to the end of this file, so this import stays at the top
+> to survive merges. Do not add fork notes below.
+
 This file provides guidance to Claude Code when working in this repository.
 
 ## What this repo is
