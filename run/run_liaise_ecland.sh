@@ -84,10 +84,28 @@ CMF_RESTART_IN_NAME=${CMF_RESTART_IN_NAME:-restartin_cmf.nc}
 CMF_STATIC_FILES=(inpmat.nc rivpar.nc rivclim.nc mpireg.nc bifprm.txt diminfo.txt ${CMF_STATIC_FILES_EXTRA:-})  # extra files (e.g. dam_param.csv) via env var, staged from CMF_STATIC_DIR like the rest
 
 # Optional OpenMP settings
-# Thread count: see the note in run_liaise_ecland.slurm. An inherited
-# OMP_NUM_THREADS (ECMWF's profile sets it to 1) must not silently win here either;
-# deliberate overrides go through OMP_THREADS.
-export OMP_NUM_THREADS=${OMP_THREADS:-4}
+# Thread count. Measured 2026-09-17 on the LIAISE domain, 3 identical years each:
+#
+#   glb_15min (1,405 river cells):  1 thread 168 s/yr | 4 threads 274 s/yr  -> 1.6x SLOWER
+#   glb_03min (34,137 river cells): 1 thread ~36 min/yr | 4 threads ~2x faster
+#
+# So threading is NOT a universal win: at the coarse resolution the OpenMP regions are
+# too small to pay back their synchronisation cost, and only the fine resolutions
+# benefit. Default is therefore 1 -- which is also what every validated run in this
+# repo actually used -- and finer resolutions opt in with OMP_THREADS=4.
+#
+# Do NOT write ${OMP_NUM_THREADS:-...} here: ECMWF's shell profile exports
+# OMP_NUM_THREADS=1 and `sbatch --export=ALL` propagates it, so `:-` never fires and the
+# setting silently becomes whatever the submitting shell had. That hid the single-
+# threading above for the entire project until it was caught by inspecting a live
+# process. The value is echoed at startup so this cannot regress unnoticed.
+#
+# Threading is not bit-reproducible despite LBITSAFE=.TRUE. (1% of cell-times differ),
+# but the differences are confined to already-unstable estuary/bifurcation cells with
+# near-zero or negative discharge: median difference 4e-4 m3/s, and gauge skill scores
+# are identical to 4 decimal places. Mixing thread counts across years of one run is
+# therefore acceptable, if untidy.
+export OMP_NUM_THREADS=${OMP_THREADS:-1}
 echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (OMP_THREADS=${OMP_THREADS:-unset})"
 export OMP_STACKSIZE=${OMP_STACKSIZE:-512M}
 

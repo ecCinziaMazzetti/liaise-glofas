@@ -390,14 +390,13 @@ const CAVEAT_NAMES = __CAVEATS_JSON__;
 
 // Per-metric "how many gauges are good" bar. Each metric needs its own: NSE > 0 is the
 // classic "better than predicting the mean observed flow" test, but the equivalent bar
-// for KGE is NOT 0 -- it is 1 - sqrt(2) ~= -0.41 (Knoben et al. 2019, HESS) -- so
-// labelling KGE > 0 as "beats the mean-flow benchmark" would be wrong. KGE > 0 is
-// reported here as its own, stricter and commonly used, bar.
+// for KGE is NOT 0 -- it is 1 - sqrt(2) ~= -0.41 (Knoben et al. 2019, HESS), which is
+// what this tile uses, so the KGE and NSE tiles ask the same question.
 // `test` gets (value, station, experiment, year) so a metric can be judged on a
 // companion quantity where its own units have no sensible fixed bar -- see `bias`.
 const METRIC_STATS = {
-  kge:   { test: v => v > 0,             label: 'gauges with KGE &gt; 0' },
-  nse:   { test: v => v > 0,             label: 'gauges with NSE &gt; 0' },
+  kge:   { test: v => v > -0.41,         label: 'gauges beating the mean-flow benchmark (KGE &gt; &minus;0.41)' },
+  nse:   { test: v => v > 0,             label: 'gauges beating the mean-flow benchmark (NSE &gt; 0)' },
   r:     { test: v => v > 0.5,           label: 'gauges with r &gt; 0.5' },
   pbias: { test: v => Math.abs(v) <= 25, label: 'gauges within &plusmn;25% of observed volume' },
   // Bias is absolute m3/s and spans orders of magnitude across these gauges, so it has
@@ -710,10 +709,12 @@ footer = ((args.intro_html or default_intro) +
     "variance-based scores to extreme values — a metric artifact, not a model failure. Colour scales "
     "are clipped at the legend bounds; the real number is always shown in the panel and table.</p>"
     "<p><b>The count tile</b> uses a bar appropriate to each metric, since they are not "
-    "interchangeable: NSE &gt; 0 is the classic \"better than predicting the mean observed "
-    "flow\" test; the equivalent bar for KGE is <i>not</i> 0 but 1&nbsp;&minus;&nbsp;&radic;2 "
-    "&asymp; &minus;0.41 (Knoben et al. 2019), so KGE&nbsp;&gt;&nbsp;0 is reported as its own, "
-    "stricter bar rather than being mislabelled as the mean-flow benchmark. Correlation uses "
+    "interchangeable. NSE&nbsp;&gt;&nbsp;0 and KGE&nbsp;&gt;&nbsp;&minus;0.41 are the "
+    "<i>same</i> question &mdash; \"does this gauge beat simply predicting the mean observed "
+    "flow?\" &mdash; because a mean-flow prediction scores NSE&nbsp;=&nbsp;0 but "
+    "KGE&nbsp;=&nbsp;1&nbsp;&minus;&nbsp;&radic;2&nbsp;&asymp;&nbsp;&minus;0.41 (Knoben, Freer "
+    "&amp; Woods 2019). Using KGE&nbsp;&gt;&nbsp;0 for that label, as this page first did, "
+    "would be a stricter test wearing the wrong name. Correlation uses "
     "r&nbsp;&gt;&nbsp;0.5 and PBIAS uses &plusmn;25% of observed volume. Bias is an absolute "
     "m³/s quantity spanning orders of magnitude between the Ebro main stem and a "
     "100&nbsp;km² headwater, so it has no meaningful fixed bar of its own; its tile judges "

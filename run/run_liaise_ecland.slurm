@@ -100,14 +100,29 @@ module load hpcx-openmpi/2.9.0
 module load netcdf4
 
 # Optional OpenMP settings
-# Thread count: the SLURM allocation is authoritative. Do NOT fall back to an
-# inherited OMP_NUM_THREADS -- ECMWF's own shell profile exports OMP_NUM_THREADS=1,
-# and `sbatch --export=ALL` propagates it, so `${OMP_NUM_THREADS:-...}` silently
-# pinned every run to a single thread regardless of --cpus-per-task. That cost ~2x
-# on the glb_03min run before it was spotted (2026-09-17). Deliberate overrides go
-# through OMP_THREADS instead, and the choice is echoed so a regression is visible.
-export OMP_NUM_THREADS=${OMP_THREADS:-${SLURM_CPUS_PER_TASK:-4}}
-echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (cpus-per-task=${SLURM_CPUS_PER_TASK:-unset}, OMP_THREADS=${OMP_THREADS:-unset})"
+# Thread count. Measured 2026-09-17 on the LIAISE domain, 3 identical years each:
+#
+#   glb_15min (1,405 river cells):  1 thread 168 s/yr | 4 threads 274 s/yr  -> 1.6x SLOWER
+#   glb_03min (34,137 river cells): 1 thread ~36 min/yr | 4 threads ~2x faster
+#
+# So threading is NOT a universal win: at the coarse resolution the OpenMP regions are
+# too small to pay back their synchronisation cost, and only the fine resolutions
+# benefit. Default is therefore 1 -- which is also what every validated run in this
+# repo actually used -- and finer resolutions opt in with OMP_THREADS=4.
+#
+# Do NOT write ${OMP_NUM_THREADS:-...} here: ECMWF's shell profile exports
+# OMP_NUM_THREADS=1 and `sbatch --export=ALL` propagates it, so `:-` never fires and the
+# setting silently becomes whatever the submitting shell had. That hid the single-
+# threading above for the entire project until it was caught by inspecting a live
+# process. The value is echoed at startup so this cannot regress unnoticed.
+#
+# Threading is not bit-reproducible despite LBITSAFE=.TRUE. (1% of cell-times differ),
+# but the differences are confined to already-unstable estuary/bifurcation cells with
+# near-zero or negative discharge: median difference 4e-4 m3/s, and gauge skill scores
+# are identical to 4 decimal places. Mixing thread counts across years of one run is
+# therefore acceptable, if untidy.
+export OMP_NUM_THREADS=${OMP_THREADS:-1}
+echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (OMP_THREADS=${OMP_THREADS:-unset}, cpus-per-task=${SLURM_CPUS_PER_TASK:-unset})"
 export OMP_STACKSIZE=${OMP_STACKSIZE:-512M}
 
 # -------------------------
