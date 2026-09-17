@@ -40,8 +40,11 @@ divergence:
 - `run/run_liaise_ecland.slurm` hardcodes `--output`/`--error` into
   `/perm/pad/liaise-ecland/run/logs/`; `sbatch` fails outright for anyone else.
   Override on the command line until upstream takes a fix.
-- `run/build_control_dashboard.py` is new here and fills a real gap: the control
-  dashboard was previously hand-made and not reproducible from a clone.
+- `run/build_land_control_dashboard.py` is new here and fills a real gap: the
+  LAND-surface control dashboard was hand-made and not reproducible from a clone.
+  Deliberately renamed away from `build_control_dashboard.py`: upstream added a
+  file of that exact name under `cama_flood/` in the same window, but it is a
+  river-gauge skill map, a different page entirely -- not a duplicate.
 
 ## Environment gotchas on this machine (2026-09-17)
 
@@ -94,63 +97,77 @@ Build `origin/develop` instead — `LWRFIRE=.FALSE.` by default and neither
 namelist sets it. Verified output-neutral: 1988 control reproduces all five
 reference diagnostics exactly, at 2m59s vs 4m42s.
 
-## Reproduction results (2026-09-17)
+## Reproduction results, and why the first pass had to be redone (2026-09-17)
 
-Both runs use my own pins, my own copy of the forcing
-(`forcing/WFDE5_CRU_GPCC_ecland/`, 37 files, 1.9 GB, copied from
-`/perm/pad/liaise-ecland/forcing/` so no pad dependency remains at run time) and
-the Git-LFS ancillaries.
+**Read this before trusting any number in this fork's earlier dashboards or JSONs.**
 
-- **37-year control** (`namelist/input`, `RUN_ROOT=/perm/mocm/liaise_ctl_1988_2024`):
-  37/37 years, 2h34m41s. Against
-  `/perm/pad/liaise_discharge_compare/control_run_diagnostics.json`:
-  **184 of 185 field-years exactly identical**, the one exception being
-  root-zone moisture in 1995 differing by 0.01 kg/m² (the last decimal of a
-  value rounded to 2 places). Precipitation 641-975 mm/yr and T2m 11.91 -> 13.45 °C
-  both match the documented signatures. T2m trend **+0.34 °C/decade**.
-- **37-year coupled** (`namelist/input_cmf1way`,
-  `RUN_ROOT=/perm/mocm/liaise_cmf_1988_2024`): 37/37 years, 2h01m40s, 70 GB,
-  all 37 `o_totout.nc`, both restart chains reaching 2024. 1988 discharge has
-  **1405 active river cells** and 100% finite output, matching the documented
-  domain exactly. Scored over 1988-2014 (133 station-years, 7 GRDC gauges,
-  `RIO GUADALOPE, CASPE` excluded): median KGE **-0.233**, r **0.359**,
-  PBIAS **-37.9%** — close to the documented -35.4%.
-- The coupled run's land output is **bit-identical to my own control** in every
-  year 1988-2014, which is the correct behaviour for 1-way coupling: CaMa-Flood
-  must not feed back into the land unless `NCMF2LAKEC=2`.
+The first pass reproduced upstream's 37-year control *exactly* -- 184 of 185
+field-years identical to
+`/perm/pad/liaise_discharge_compare/control_run_diagnostics.json` (the one
+exception root-zone moisture in 1995, 0.01 kg/m2, the last decimal of a value
+rounded to 2 places), and a coupled run with 1405 active river cells and 100%
+finite discharge. Both matched the documented signatures.
 
-Diagnostics JSONs: `/perm/mocm/liaise_diagnostics/`. Dashboards:
-`sites.ecmwf.int/mocm/liaise/` (control) and `.../discharge/` (skill).
+**Both were nevertheless invalid as multi-year runs, and so was the reference
+JSON they matched**: every year silently cold-started from `soilinit` instead of
+continuing the previous year's land state.
 
-### Upstream's on-disk runs are NOT restart-chained — do not score against them
+Upstream found and fixed this independently in `4f0ad4e` (2026-09-16 18:53),
+with the real root cause: the offline driver only calls `RDRES` (which reads
+`restartin.nc`) when `NSTART != 0`, and `patch_namelist_for_year` always sets
+`NSTART=0`. So the old `restart_in.nc` + `LNF=.FALSE.` path staged a restart the
+driver never read, with **no error message**. Every multi-year run made with
+these scripts before that commit is affected, including upstream's own
+2026-09-13 reference and the 2026-09-13 dashboard built from it.
 
-Upstream **re-ran both** the control and the coupled chain on **2026-09-16**
-(control 19:49-21:41, coupled 16:18-18:12), overwriting the 2026-09-13 output,
-with the land restart chain broken: `LNF=.TRUE.` in **every** year 1988-2024 and
-no `restart_in.nc` staged in any work directory. The land restarts were written
-each year and never read back. So each year cold-starts from `soilinit` and has
-no soil-moisture memory.
+The fix links the previous year's `restartout.nc` **as** `soilinit`
+(`restartout.nc` is a superset: `SoilMoist` in kg m-2 which `RDSUPR` converts,
+all `NCSNEC` snow layers, WTD), matching `ecland_run_model.sh`'s own RLOOP
+mechanism, and runs normally at `NSTART=0`, `LNF=.TRUE.`.
 
-Consequences, all verified:
-- `/perm/pad/liaise-ecland/run/output/` no longer reproduces
-  `control_run_diagnostics.json`, which it is supposed to have produced:
-  1989 runoff -102.5 mm vs the JSON's -169.3 mm, 2000 -199.9 vs -212.3.
-  Precipitation matches exactly in both years, as it must — it is forcing-driven
-  and cannot depend on initial state. That contrast is the diagnostic signature.
-- `/perm/pad/liaise_cmf_1988_2024/` has the same defect, giving median PBIAS
-  **-52.3%** against my correctly-chained **-37.9%**.
-- Upstream's coupled run matches upstream's *current* control exactly (both
-  cold-start), which is why the defect is invisible if the two are only compared
-  with each other. 1988 agrees with a chained run too, since the first year
-  cold-starts either way; divergence starts in 1989.
-- The **2026-09-13 reference JSON is still correct** and is what my control
-  reproduces. Compare against the JSON, never against the current on-disk output.
+**Diagnostic trap, recorded because it cost this fork a wrong conclusion.**
+`LNF=.TRUE.` with no `restart_in.nc` in the work directory is the **FIXED**
+configuration, not the broken one; `LNF= .FALSE.` with a staged `restart_in.nc`
+is the **BROKEN** one. Reading those signatures the intuitive way inverts the
+verdict, and this fork initially did exactly that -- concluding upstream's runs
+were defective and its own correct, when the reverse was true. Do not diagnose
+this from the namelist. Test the state directly; these two checks are unambiguous
+and unit-free:
 
-The tell is formatting: upstream's line is the untouched template
-(`LNF=.TRUE.` with its trailing comment) whereas `sed_inplace` leaves
-`LNF= .FALSE.` with a tell-tale space — so the patch never fired there.
-Likeliest cause is an older copy of `run_liaise_ecland.sh` or an overriding
-environment variable; not established. **Not yet reported upstream.**
+| check | cold-starting | correctly chained |
+|---|---|---|
+| 1 Jan soil moisture, year A vs year B | nearly identical (~5) | genuinely different (~400) |
+| 31 Dec -> 1 Jan, one hour apart | discontinuous (~270) | continuous (~0.04) |
+
+Measured on this fork's first-pass control: 4.95 and 269.6 -> cold-starting.
+On upstream's post-fix control: 410.5 and 0.037 -> chained.
+
+**The effect is large**, per upstream's own quantification: the fixed chain
+lowers Jan-Mar discharge by a factor 1.5-4 and annual means by 15-45%, and
+raises peak flows, since real antecedent-moisture memory lets wet spells
+compound. It also removes a spurious 1-January runoff pulse traced to one
+`soilinit` cell (43.25N, -5.75E, outside the Ebro) sitting above saturation and
+dumping ~50 mm at each "start", which CaMa-Flood routed into thousand-m3/s
+1-January spikes downstream. That cell still needs capping in `init_clim`.
+
+This also retroactively explains a difference this fork misread as evidence: its
+first-pass coupled run scored median PBIAS **-37.9%** against upstream's
+**-52.3%**, which is exactly the 15-45% annual-mean shift above. Upstream's is
+the valid figure.
+
+Invalid first-pass runs are preserved for reference only, following upstream's
+naming: `/perm/mocm/liaise_ctl_1988_2024_NOCHAIN_invalid` and
+`/perm/mocm/liaise_cmf_1988_2024_NOCHAIN_invalid`. **Not for use.** The
+dashboards published from them at `sites.ecmwf.int/mocm/liaise/` were rebuilt
+from the corrected runs; if a page shows cold-start numbers it predates that.
+
+### Chained reruns (2026-09-17, after merging 4f0ad4e)
+
+Both rerun with the fixed script, `develop` pin, into
+`/perm/mocm/liaise_ctl_1988_2024` and `/perm/mocm/liaise_cmf_1988_2024`.
+Verify each with the two state checks in the table above -- the first year
+correctly reports `Initial state: .../soilinit` and every later year must report
+`Initial state (restart chain): .../restart_<y>1231.nc -> soilinit`.
 
 ### The 0.13% negative-discharge figure needs a tolerance
 
@@ -179,9 +196,9 @@ domain, at -0.0 to -0.6 m³/s. Rounding-level noise inflating a count.
 
 ### Discharge-dashboard caveat
 
-`sites.ecmwf.int/mocm/liaise/discharge/` headlines "GPU wins 80/133", which
-overstates the GPU chain. Its Fortran rows are my restart-chained run, but its
-GPU rows are upstream's eclandpy -> CaMa-Flood-GPU chain, driven by runoff from
-an ecLand run with the cold-start defect above. The two sides are therefore not
-forced by equivalent land states. A fair comparison needs either upstream's GPU
-chain re-driven from my runoff, or my own eclandpy run.
+`sites.ecmwf.int/mocm/liaise/discharge/` headlines a "GPU wins N/133" count that
+should not be read as a model comparison. Its Fortran rows are this fork's run
+and its GPU rows are upstream's eclandpy -> CaMa-Flood-GPU chain, so the two
+sides are only comparable when both were produced from correctly chained ecLand
+runoff. A fair comparison needs either upstream's GPU chain re-driven from this
+fork's runoff, or an eclandpy run of this fork's own.

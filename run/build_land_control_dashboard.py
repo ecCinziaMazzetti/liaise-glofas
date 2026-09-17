@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build the LIAISE Fortran-control dashboard as one self-contained index.html.
+"""Build the LIAISE land-surface control dashboard as one self-contained index.html.
+
+Not to be confused with upstream's cama_flood/build_control_dashboard.py, which is a
+river-GAUGE SKILL MAP built from skill_benchmark_control.py. This one is the LAND-surface
+diagnostics page -- precipitation, evapotranspiration, runoff, T2m, soil moisture --
+the counterpart of sites.ecmwf.int/pad/liaise/control/.
 
 The control page (sites.ecmwf.int/<space>/<site>/) previously had no builder in
 this repository -- it was made by hand, so a clone could not reproduce it. This
@@ -12,7 +17,7 @@ run/extract_control_diagnostics.py's JSON, with no eclandpy or GPU inputs.
         python3 run/extract_control_diagnostics.py
 
     # 2. render the page (needs python3/3.11+, not the default 3.6)
-    python3 run/build_control_dashboard.py \
+    python3 run/build_land_control_dashboard.py \
         --diagnostics $PERM/liaise_diagnostics/control_diagnostics.json \
         --out $PERM/liaise_dashboard/index.html
 
@@ -152,7 +157,7 @@ cold start from <code>soilinit</code> in {years[0]}.<br>
 stores <code>Evap</code> and <code>Qs+Qsb</code> as negative (water leaving the column). Annual depths come
 from rates (kg m⁻² s⁻¹) multiplied by the output interval, not from pre-accumulated fields.<br>
 <b>Source:</b> <code>{html.escape(str(args.diagnostics))}</code>, via
-<code>run/extract_control_diagnostics.py</code>; rendered by <code>run/build_control_dashboard.py</code>.
+<code>run/extract_control_diagnostics.py</code>; rendered by <code>run/build_land_control_dashboard.py</code>.
 {html.escape(args.note) if args.note else ""}</p></section>'''
 
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
