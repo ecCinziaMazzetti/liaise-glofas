@@ -97,6 +97,48 @@ chain, rebuilt on the same generator). Adding 3 arcmin needs only one more
 `build_resolution_dashboard.py` with a third `--experiment` and drop the
 `--pending "3 arcmin"` flag.
 
+## Q100 across all three routing resolutions — DONE 2026-09-17
+
+All three 37-year naturalised runs are complete (glb_03min finished 2026-09-17,
+job `37911517`, `COMPLETED 0:0`, 10h08m, 37/37 years), so Q100 was computed at
+each with the fixed area-aware allocation (`estimate_dam_q100.py`, see
+`docs/cama_flood_reservoir_methodology.md`).
+
+**The thing that changes with resolution is dam ALLOCATION, not Q100.**
+
+| resolution | dams | within 20% of `area_alloc` | median alloc error | dams per cell |
+|---|---|---|---|---|
+| glb_15min | 45 | 19 | 41.5% | 45 dams / 35 cells |
+| glb_06min | 44 | 41 | 1.4% | 44 / 44 |
+| glb_03min | 43 | 43 | **0.7%** | 43 / 43 |
+
+Restricting to the **19 dams well-allocated (<20% error) at all three
+resolutions** — which isolates "routing resolution changed the extremes" from
+"allocation finally became possible" — Q100 is **essentially
+resolution-invariant**:
+
+```
+Q100(3 arcmin) / Q100(15 arcmin):  median 0.99x   mean 1.01x   range 0.32-2.11x
+                                   higher at finer resolution: 8/19 dams
+```
+
+e.g. Yesa 1895 -> 1888, Mediano 1065 -> 1041, Rialb 1719 -> 1748, Barasona
+690 -> 686, Calanda 1124 -> 1114. Mequinenza rises 1.19x and Caspe2 2.11x; the
+rest sit within a few percent.
+
+**Interpretation**: at a cell whose catchment the grid already resolves, the
+100-year flood is set by the upstream water balance, not by how finely the
+channel is routed — consistent with the mass-conservation argument already
+established in `CLAUDE.md` for channel width (means are protected; here the
+extremes largely are too, once siting is correct). The scientific value of
+6/3 arcmin for the reservoir work is therefore that **most of these reservoirs
+become siteable at all** (19/45 -> 43/43), not that the flood statistics shift.
+
+Practical consequence: the dam pipeline should move to **glb_06min or finer**,
+where every dam also gets its own cell so `build_dam_param_csv.py`'s
+co-location dedup stops discarding six reservoirs. Q100 tables:
+`/perm/pad/liaise_discharge_compare/ebro_dam_q100_{15min,06min,03min}.csv`.
+
 ## Paused tonight, not abandoned: Reservoir operation on the Ebro (CaMa-Flood v4.20 dam module)
 
 Full feasibility writeup: [Ebro Reservoir Operation](https://claude.ai/artifact/V5ZZxE3K4jFS6tsds5JiP3)
