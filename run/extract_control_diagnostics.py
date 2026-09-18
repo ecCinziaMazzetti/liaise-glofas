@@ -2,12 +2,17 @@
 """Extract domain-mean land-surface diagnostics from the 37-year LIAISE
 control run (run/output/<year>/{o_wat,o_d2m,o_eva}.nc) for the dashboard."""
 import json
+import os
 import numpy as np
 import netCDF4 as nc
 from pathlib import Path
 
-OUTPUT_ROOT = Path("/perm/pad/liaise-ecland/run/output")
-YEARS = list(range(1988, 2025))
+# Paths/years are environment-configurable so a run other than the original
+# /perm/pad 37-year control can be diagnosed; defaults reproduce that run.
+OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", "/perm/pad/liaise-ecland/run/output"))
+START_YEAR = int(os.environ.get("START_YEAR", 1988))
+END_YEAR = int(os.environ.get("END_YEAR", 2024))
+YEARS = list(range(START_YEAR, END_YEAR + 1))
 
 def masked_mean(arr):
     a = np.ma.masked_invalid(np.ma.filled(arr, np.nan))
@@ -84,7 +89,8 @@ monthly_clim = {
 }
 
 out = {"annual": annual, "monthly_climatology": monthly_clim}
-outpath = Path("/perm/pad/liaise_discharge_compare/control_run_diagnostics.json")
+outpath = Path(os.environ.get("DIAGNOSTICS_JSON",
+                              "/perm/pad/liaise_discharge_compare/control_run_diagnostics.json"))
 outpath.parent.mkdir(parents=True, exist_ok=True)
 outpath.write_text(json.dumps(out, indent=2))
 print(f"\nWrote {outpath}")
