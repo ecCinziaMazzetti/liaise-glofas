@@ -161,27 +161,103 @@ naming: `/perm/mocm/liaise_ctl_1988_2024_NOCHAIN_invalid` and
 dashboards published from them at `sites.ecmwf.int/mocm/liaise/` were rebuilt
 from the corrected runs; if a page shows cold-start numbers it predates that.
 
-### Chained reruns (2026-09-17, after merging 4f0ad4e)
+### Chained reruns: validated (2026-09-18)
 
-Both rerun with the fixed script, `develop` pin, into
-`/perm/mocm/liaise_ctl_1988_2024` and `/perm/mocm/liaise_cmf_1988_2024`.
-Verify each with the two state checks in the table above -- the first year
-correctly reports `Initial state: .../soilinit` and every later year must report
-`Initial state (restart chain): .../restart_<y>1231.nc -> soilinit`.
+Both 37-year runs redone with the fixed script and the `develop` pin, into
+`/perm/mocm/liaise_ctl_1988_2024` (1h18m55s) and
+`/perm/mocm/liaise_cmf_1988_2024` (1h33m16s), 37/37 years each, no errors.
+
+**Chain proven, not assumed** (`run/verify_restart_chain.py`, new -- use it
+rather than reading the namelist):
+
+| run | 1 Jan '89 vs '95 | 31 Dec -> 1 Jan | verdict |
+|---|---|---|---|
+| my control (rerun) | 410.5305 | 0.0366 | CHAINED |
+| my coupled (rerun) | 410.5305 | 0.0366 | CHAINED |
+| upstream post-fix | 410.5305 | 0.0366 | CHAINED |
+| my first pass | 4.9525 | 269.6140 | cold-starting |
+
+**Agreement with upstream is exact.** Land diagnostics: 185 of 185 field-years
+identical, both against the (regenerated, see below) reference JSON and against
+an independent extraction of upstream's own post-fix output. Discharge: 1988
+matches on every summary statistic (1405 active cells, 100% finite,
+worst -5096.0, peak 7001.6, mean 48.51 m3/s). GRDC scores agree to ~1e-4 across
+1064 metrics at 133 station-years, the largest difference 0.00012 percentage
+points of PBIAS -- float-level, from a different build and netCDF chunking.
+
+**Corrected numbers.** Every figure this fork previously reported as evidence
+that its own run was better has moved onto upstream's values:
+
+| | first pass (cold-start) | rerun (chained) | upstream post-fix |
+|---|---|---|---|
+| median KGE | -0.233 | **-0.208** | -0.208 |
+| median r | 0.359 | **0.393** | 0.393 |
+| median PBIAS | -37.9% | **-52.3%** | -52.3% |
+| GPU beats Fortran | 80/133 | **65/133** | 65/133 |
+
+Note correlation *improves* (0.359 -> 0.393) with real antecedent-moisture
+memory; only the bias worsens.
+
+**What the fix changed in the land diagnostics** (37-year means, chained vs
+cold-start). Precipitation being bit-identical is the control that proves only
+the initial state changed:
+
+| field | chained | cold-start | change |
+|---|---|---|---|
+| precipitation | 812.70 | 812.70 | 0.0% |
+| evapotranspiration | -662.23 | -668.32 | +0.9% |
+| runoff | -157.52 | -203.38 | **+22.5%** |
+| T2m | 12.57 | 12.56 | +0.1% |
+| root-zone moisture | 405.94 | 445.34 | **-8.8%** |
+
+Trends shift more than the means do, which matters for anything reading the
+dashboard: root-zone moisture goes from -6.1 to **-22.7 kg/m2/decade** and
+runoff from -8.3 to **-18.8 mm/decade**, while precipitation (-5.75 mm/decade)
+and T2m (**+0.34 C/decade**) stay put, being forcing-driven.
+
+### The reference JSON was regenerated mid-investigation (2026-09-18)
+
+Worth knowing before trusting any comparison against a shared reference:
+`/perm/pad/liaise_discharge_compare/control_run_diagnostics.json` was rebuilt
+from upstream's post-fix run at **2026-09-17 13:49**, having held cold-start
+values (mtime 2026-09-13 21:36) the day before. 1989 runoff went from -169.3 to
+-102.5 mm in the same filename.
+
+Consequence: the *same* comparison gave opposite verdicts on consecutive days --
+this fork's cold-start first pass matched the JSON exactly on 2026-09-17, and its
+chained rerun matched the JSON exactly on 2026-09-18. Both measurements were
+correct when made; the target moved. **Always record the reference's mtime
+alongside a result you intend to quote**; `run/compare_diagnostics.py
+--show-mtime` does it for you.
+
+### Reusable tooling added here (2026-09-18)
+
+Deterministic checks live in code, not in prose, so they can gate a pipeline
+(both exit non-zero on failure):
+- `run/verify_restart_chain.py` -- the two state checks above.
+- `run/compare_diagnostics.py` -- field-by-field diagnostics comparison with
+  mtime reporting.
+
+And three skills under `.claude/skills/`, so the whole workflow is repeatable
+without reconstructing it from these notes:
+- `liaise-run` -- build, pin (with the `ldd` proof), smoke-test, submit, resume.
+- `liaise-verify` -- chain proof, diagnostics, reference comparison, discharge
+  sanity, GRDC scoring, with the expected values and the metric traps.
+- `liaise-publish` -- build the dashboards and publish via `sitesctl`.
 
 ### The 0.13% negative-discharge figure needs a tolerance
 
 Upstream `CLAUDE.md` quotes a "0.13% non-physical-negative-discharge rate" for
-the 1988 coupled run. Reproducing it gives **0.440%** counting every value below
+the 1988 coupled run. Reproducing it gives **0.352%** (chained run) counting every value below
 zero, which looks alarming and is not a defect — the metric is dominated by
 near-zero noise and is extremely threshold-sensitive:
 
 | cutoff | rate |
 |---|---|
-| `< 0` | 0.440% |
-| `< -0.001` | 0.209% |
-| `< -0.01` | 0.091% |
-| `< -1` | 0.014% |
+| `< 0` | 0.352% |
+| `< -0.001` | 0.187% |
+| `< -0.01` | 0.075% |
+| `< -1` | ~0.014% |
 
 0.13% falls between the -0.001 and -0.01 cutoffs, so the numbers are consistent;
 only the epsilon is unstated. Quote it as e.g. "0.09% of 6-hourly values below
