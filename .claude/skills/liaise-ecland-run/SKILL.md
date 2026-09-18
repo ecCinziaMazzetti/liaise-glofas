@@ -1,5 +1,5 @@
 ---
-name: liaise-run
+name: liaise-ecland-run
 description: Reproduce a multi-year LIAISE/Ebro ecLand run end to end - build and pin an executable, stage forcing and ancillaries, submit the 37-year control or CaMa-Flood-coupled chain, and check the right log lines. Use when asked to run, rerun or reproduce ecLand over the LIAISE domain, to build or pin an ecLand executable, or to resume a run that failed partway.
 ---
 
@@ -139,14 +139,14 @@ The chain is working when year 1 says `Initial state: .../soilinit` and **every
 later year** says
 `Initial state (restart chain): .../restart_<y>1231.nc -> soilinit`.
 If later years still print a plain `Initial state:`, the chain is broken — stop
-and read the `liaise-verify` skill before spending more time.
+and read the `liaise-ecland-verify` skill before spending more time.
 
 Coupled runs also print `Configured CaMa-Flood namelist for year <y> (...,
 IFRQ_INP=<n>h)`; `IFRQ_INP` must track `TCOUPFREQ`, not `TSTEP`.
 
 ### 7. Verify before believing
 
-Always finish with the **`liaise-verify`** skill. A run that completes with
+Always finish with the **`liaise-ecland-verify`** skill. A run that completes with
 status 0 can still be invalid: the restart chain used to fail silently, with no
 error message anywhere.
 

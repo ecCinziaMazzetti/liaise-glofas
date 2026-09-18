@@ -1,5 +1,5 @@
 ---
-name: liaise-verify
+name: liaise-ecland-verify
 description: Validate a finished LIAISE ecLand run - prove the annual restart chain really engaged, extract domain-mean diagnostics, compare against a reference, and sanity-check CaMa-Flood discharge. Use after any multi-year run completes, when a run's numbers look wrong or disagree with someone else's, or when asked whether a run is valid or restart-chained.
 ---
 

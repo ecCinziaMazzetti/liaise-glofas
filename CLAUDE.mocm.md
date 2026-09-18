@@ -240,10 +240,10 @@ Deterministic checks live in code, not in prose, so they can gate a pipeline
 
 And three skills under `.claude/skills/`, so the whole workflow is repeatable
 without reconstructing it from these notes:
-- `liaise-run` -- build, pin (with the `ldd` proof), smoke-test, submit, resume.
-- `liaise-verify` -- chain proof, diagnostics, reference comparison, discharge
+- `liaise-ecland-run` -- build, pin (with the `ldd` proof), smoke-test, submit, resume.
+- `liaise-ecland-verify` -- chain proof, diagnostics, reference comparison, discharge
   sanity, GRDC scoring, with the expected values and the metric traps.
-- `liaise-publish` -- build the dashboards and publish via `sitesctl`.
+- `liaise-ecland-publish` -- build the dashboards and publish via `sitesctl`.
 
 ### The 0.13% negative-discharge figure needs a tolerance
 

@@ -1,5 +1,5 @@
 ---
-name: liaise-publish
+name: liaise-ecland-publish
 description: Build the LIAISE dashboards from a finished run's diagnostics or gauge scores and publish them to ECMWF Sites with sitesctl. Use when asked to build, rebuild, update or publish a LIAISE dashboard or results page, or to put results on sites.ecmwf.int.
 ---
 
@@ -81,7 +81,7 @@ sitesctl site --space <space> --name <site> content list --match "*" --recursive
   free for the real multi-year page and makes it obvious what's provisional.
 - **Look at what's there before overwriting** (`content list --recursive`).
 - **Never publish cold-start numbers as a result.** Verify the run first with
-  the `liaise-verify` skill; a page is much harder to retract than a file.
+  the `liaise-ecland-verify` skill; a page is much harder to retract than a file.
 
 ## Reading the pages
 
