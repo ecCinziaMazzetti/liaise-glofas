@@ -148,6 +148,19 @@ def build(args) -> str:
              '<th class=n>ET mm</th><th class=n>Runoff mm</th><th class=n>T2m °C</th>'
              f'<th class=n>RootMoist kg/m²</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
 
+    # Sub-pages of an ECMWF Sites site are not discoverable -- the hub lists
+    # sites, not the paths inside them -- so a nav row here is the only thing
+    # that surfaces a companion page such as /discharge/.
+    nav = ""
+    if args.link:
+        items = []
+        for spec in args.link:
+            label, _, url = spec.partition("=")
+            if not url:
+                raise SystemExit("--link needs LABEL=URL, got %r" % spec)
+            items.append(f'<a href="{html.escape(url, quote=True)}">{html.escape(label)}</a>')
+        nav = '<nav class="nav">' + " ".join(items) + "</nav>"
+
     prov = f'''<section class="panel prov"><div class="ph"><h2>Provenance</h2></div><p>
 <b>Model:</b> {html.escape(args.model)}. <b>Forcing:</b> {html.escape(args.forcing)}.
 <b>Period:</b> {span} ({len(years)} year{"s" if len(years) != 1 else ""}), year-by-year restart chain,
@@ -193,9 +206,13 @@ td.n,th.n{{text-align:right;font-variant-numeric:tabular-nums}}
 .prov p{{color:var(--ink2);margin:0;max-width:100ch}}
 code{{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--bg);padding:1px 4px;border-radius:4px}}
 a{{color:var(--accent)}}
+.nav{{margin-top:10px;display:flex;flex-wrap:wrap;gap:14px}}
+.nav a{{font-size:13px;font-weight:600;text-decoration:none;border:1px solid var(--line);
+background:var(--surface);border-radius:999px;padding:5px 12px}}
+.nav a:hover{{border-color:var(--accent)}}
 </style></head><body><div class="wrap">
 <header><div class="eyebrow">{html.escape(args.eyebrow)}</div><h1>{html.escape(args.title)}</h1>
-<p>{html.escape(args.subtitle)}</p></header>
+<p>{html.escape(args.subtitle)}</p>{nav}</header>
 <div class="tiles">{"".join(tiles)}</div>
 <section class="panel"><div class="ph"><h2>Annual domain means</h2>
 <p class="sub">Spatial mean over the active land points, one value per year. Hover any point for its value;
@@ -220,6 +237,10 @@ def main():
     p.add_argument("--forcing", default="WFDE5-CRU-GPCC, 0.5°, hourly")
     p.add_argument("--domain", default="LIAISE / Ebro basin, 0.5°, 23×16 grid, 235 active land points")
     p.add_argument("--note", default="")
+    p.add_argument("--link", action="append", default=[], metavar="LABEL=URL",
+                   help="add a nav link to a companion page (repeatable). Sub-pages of a "
+                        "Sites site are not listed in the hub, so this is what makes them "
+                        "reachable, e.g. --link 'Discharge skill=discharge/'")
     a = p.parse_args()
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(build(a))
