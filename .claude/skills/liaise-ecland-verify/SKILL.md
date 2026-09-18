@@ -21,15 +21,15 @@ Exit status 0 means chained, 1 means cold-starting, so this can gate a pipeline.
 Pass `--run-root` twice to compare two runs side by side.
 
 **Do not diagnose this from the namelist.** The signature is counter-intuitive
-and inverting it is easy — it produced a confidently wrong conclusion here,
-including a recommendation to raise a non-existent bug with a colleague:
+and inverting it is easy. It has already produced one confident, published,
+wrong conclusion about which of two runs was valid:
 
 | work-dir signature | meaning |
 |---|---|
 | `LNF=.TRUE.`, no `restart_in.nc` | **FIXED** — previous restart linked *as* `soilinit` |
 | `LNF= .FALSE.`, `restart_in.nc` staged | **BROKEN** — driver never reads it |
 
-Root cause (upstream `4f0ad4e`): the offline driver only calls `RDRES`, which
+Root cause (commit `4f0ad4e`): the offline driver only calls `RDRES`, which
 reads `restartin.nc`, when `NSTART /= 0`, and the run script always starts each
 year at `NSTART=0`.
 
@@ -41,8 +41,8 @@ The state tests are unambiguous because they compare a field with itself:
 | 31 Dec -> 1 Jan, one hour apart | ~270 (jumps) | ~0.04 |
 
 If a run is cold-starting, it is not usable as a multi-year run. Rename it
-`*_NOCHAIN_invalid` (upstream's convention) so it can't be used by accident, and
-rerun with a script containing `4f0ad4e`.
+`*_NOCHAIN_invalid`, the convention used in this repository, so it cannot be
+used by accident, and rerun with a script containing `4f0ad4e`.
 
 ## 2. Extract diagnostics
 
@@ -78,7 +78,7 @@ python3 run/compare_diagnostics.py --a mine.json --b reference.json --show-mtime
   moisture between a cold-started and a chained 37-year run.
 
 **Always use `--show-mtime` when quoting a result.** A reference JSON on a shared
-filesystem can be regenerated under you. That happened here:
+filesystem can be regenerated under you. This has happened:
 `/perm/pad/liaise_discharge_compare/control_run_diagnostics.json` held
 cold-start values on 2026-09-13 and post-fix values by 2026-09-17, so the same
 comparison gave opposite verdicts on consecutive days. Record the mtime with any

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify that a multi-year ecLand run is genuinely restart-chained.
 
-Why this exists: the annual restart chain can fail *silently*. Before upstream's
+Why this exists: the annual restart chain can fail *silently*. Before commit
 4f0ad4e, run_liaise_ecland.{sh,slurm} staged the previous year's restart as
 restartin.nc and set LNF=.FALSE., but the offline driver only calls RDRES when
 NSTART /= 0 and the script always starts each year at NSTART=0 -- so the staged
@@ -9,9 +9,10 @@ restart was never read and every year cold-started from soilinit, with no error
 message and no obvious signature in the output.
 
 Do NOT try to diagnose this from the namelist: the signature is counter-
-intuitive and inverting it is easy. `LNF=.TRUE.` with no restart_in.nc is the
-FIXED configuration (the previous restart is linked *as* soilinit); `LNF=.FALSE.`
-with a staged restart_in.nc is the BROKEN one. Test the model state instead,
+intuitive and inverting it is easy -- it has already caused one wrong verdict.
+`LNF=.TRUE.` with no restart_in.nc is the FIXED configuration (the previous
+restart is linked *as* soilinit); `LNF=.FALSE.` with a staged restart_in.nc is
+the BROKEN one. Test the model state instead,
 which is unambiguous:
 
   1. January states across years: a cold-started run begins every year from the

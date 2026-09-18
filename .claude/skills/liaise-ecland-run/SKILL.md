@@ -11,7 +11,7 @@ build ~3 min, 37-year control ~1h20, 37-year coupled ~1h35, single year ~3 min.
 ## Order of work
 
 Never skip step 3. A run launched against an unverified executable can burn two
-hours and produce silently wrong physics — that has happened on this repo twice.
+hours and produce silently wrong physics — that has happened twice here.
 
 ### 1. Inputs
 
@@ -47,7 +47,7 @@ Commit choice matters more than it looks:
 
 - **`origin/develop` tip — default choice.** Has the fix *and* the netCDF
   write-behind/chunking speedup (`c0526a1`), ~1.6x faster I/O.
-- `55f3d24` — provenance-matched to upstream's reference numbers, but predates
+- `55f3d24` — provenance-matched to the committed reference diagnostics, but predates
   the speedup (~3m50s/year vs ~2m59s).
 - `main` HEAD — avoid: carries an *ungated* frozen-soil macropore change that
   moves `runoff_mm`.
@@ -106,8 +106,9 @@ Success: `ecLand finished with status 0`, 12 `o_*.nc`, `time=8784` (366x24).
 ### 5. Submit the full chain
 
 `sbatch`, never the login node, for anything longer than one year. Override the
-log paths: upstream hardcodes them into `/perm/pad/...` and `sbatch` **fails
-outright** when that isn't writable.
+log paths if the committed `#SBATCH --output`/`--error` point somewhere you
+cannot write — `sbatch` **fails outright** in that case, rather than falling
+back to a default.
 
 ```bash
 EXE=$PWD/run/bin_<tag>/bin/ecland-master-dp

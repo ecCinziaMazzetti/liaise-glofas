@@ -15,7 +15,7 @@ this domain: runoff +22.5%, root-zone moisture -8.8% between a cold-started and
 a correctly chained 37-year run) while precipitation stays exactly equal.
 
 Caution: a reference JSON on a shared filesystem can be regenerated under you.
-This happened here -- /perm/pad/liaise_discharge_compare/control_run_diagnostics.json
+This has happened -- /perm/pad/liaise_discharge_compare/control_run_diagnostics.json
 held cold-start values on 2026-09-13 and post-fix values by 2026-09-17, so an
 identical comparison gave opposite verdicts on consecutive days. Record the
 reference's mtime alongside any result you intend to quote; --show-mtime does it

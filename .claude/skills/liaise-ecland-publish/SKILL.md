@@ -32,14 +32,14 @@ python3 cama_flood/build_chain_dashboard.py \
   --results $PERM/liaise_diagnostics/skill.json \
   --out $PERM/liaise_dashboard_discharge/index.html \
   --fortran-label "Fortran ecLand-CaMa-Flood chain (<user>, restart-chained)" \
-  --gpu-label "eclandpy to CaMa-Flood-GPU chain (pad reference)"
+  --gpu-label "eclandpy to CaMa-Flood-GPU chain (<whose run>)"
 ```
 
 Each writes one self-contained `index.html` (no external assets beyond a
 webfont), so it can be moved or mailed as a single file.
 
 **Label the provenance of every series you didn't produce.** The chain dashboard
-draws a Fortran chain and a GPU chain, and the GPU rows are usually upstream's
+draws a Fortran chain and a GPU chain, and the GPU rows are often someone else's
 eclandpy output, not yours. Its "GPU wins N/133" headline is only a model
 comparison when both sides were driven by equivalently chained ecLand runoff —
 say so in the labels rather than letting the page imply otherwise.
