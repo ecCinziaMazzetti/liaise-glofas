@@ -64,7 +64,27 @@ ap.add_argument("--baseline", default="/perm/pad/liaise_discharge_compare/skill_
 ap.add_argument("--out", required=True)
 ap.add_argument("--fortran-label", default="Fortran ecLand–CaMa-Flood chain")
 ap.add_argument("--gpu-label", default="eclandpy → CaMa-Flood-GPU chain")
+# Sites' hub lists sites, not the paths inside them, so a subpage is only
+# reachable if a sibling page links to it.
+ap.add_argument("--link", action="append", default=[], metavar="LABEL=URL",
+                help="add a nav link to a companion page (repeatable), e.g. --link '37-year control=../'")
 a = ap.parse_args()
+
+# Emitted only when --link is given, CSS included, so that without it the
+# output is byte-identical to a build of this script before the option existed.
+nav = ""
+if a.link:
+    _items = []
+    for _spec in a.link:
+        _label, _, _url = _spec.partition("=")
+        if not _url:
+            raise SystemExit("--link needs LABEL=URL, got %r" % _spec)
+        _items.append('<a href="%s">%s</a>' % (_url, _label))
+    nav = ('<style>.nav{ margin:18px 0 0; display:flex; flex-wrap:wrap; gap:14px; }'
+           '.nav a{ font-size:13px; font-weight:600; text-decoration:none; color:var(--ink);'
+           'border:1px solid var(--border); border-radius:999px; padding:5px 12px; }'
+           '.nav a:hover{ border-color:var(--ink); }</style>'
+           '<nav class="nav">' + " ".join(_items) + "</nav>")
 
 rows = json.load(open(a.results))
 base = json.load(open(a.baseline))
@@ -145,7 +165,7 @@ html = f"""<title>Two Chains on the Ebro</title>
   <p class="lede">The Fortran ecLand–CaMa-Flood coupled chain (<code>LECMF1WAY</code>, cold start 1988, restart-chained to 2024) and the
     eclandpy → CaMa-Flood-GPU chain, both on the same glb_15min network and WFDE5 forcing, against the 7 real GRDC gauges of the Ebro
     for {span}. The {"GPU" if lead=="GPU" else "Fortran"} chain leads on KGE in <b>{S['gpu_wins'] if lead=="GPU" else S['n']-S['gpu_wins']} of {S['n']}</b>
-    station-years; median PBIAS is <b>{fmt_pb(S['f_pb'])}</b> (Fortran) vs <b>{fmt_pb(S['g_pb'])}</b> (GPU).</p>
+    station-years; median PBIAS is <b>{fmt_pb(S['f_pb'])}</b> (Fortran) vs <b>{fmt_pb(S['g_pb'])}</b> (GPU).</p>{nav}
 
   <section>
     <h2>From the 5-year benchmark to the full record</h2>
